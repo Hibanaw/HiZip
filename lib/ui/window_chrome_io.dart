@@ -2,7 +2,8 @@ import 'dart:io';
 import 'dart:ffi' as ffi;
 
 import 'package:flutter/material.dart';
-import 'package:nativeapi_flutter/nativeapi_flutter.dart' as native;
+import 'package:flutter/services.dart';
+import 'package:nativeapi/nativeapi.dart' as native;
 
 import 'desktop_widgets.dart';
 
@@ -13,6 +14,18 @@ void setTaskWindowCloseAction(VoidCallback action) => _closeSecondary = action;
 
 /// Resolve and configure the existing Flutter window rather than creating one.
 Future<void> initializeWindowChrome({int? nativePointer}) async {
+  if (native.NativePlatform.isHarmonyOS) {
+    try {
+      final host = await native.NativePlatform.hostInfo();
+      if (host.capabilities.contains('windowControl')) {
+        await native.NativeHostWindow.configure(title: 'HiZip');
+      }
+    } on PlatformException catch (error) {
+      // Some HarmonyOS device modes do not expose desktop window controls.
+      debugPrint('Native window configuration unavailable: ${error.message}');
+    }
+    return;
+  }
   if (!(Platform.isMacOS || Platform.isWindows || Platform.isLinux)) return;
   _secondary = nativePointer != null;
   _window = nativePointer == null
@@ -98,7 +111,7 @@ class _WindowControlsState extends State<_WindowControls> {
 }
 
 Map<String, double> windowFrame() {
-  final rect = _window?.bounds.toRect();
+  final rect = _window?.bounds;
   return rect == null
       ? {}
       : {
@@ -111,9 +124,9 @@ Map<String, double> windowFrame() {
 
 void configureTaskWindow(Map<String, dynamic> parent) {
   final window = _window!;
-  window.setSize(const Size(480, 240).toNative(), false);
-  window.minimumSize = const Size(480, 240).toNative();
-  window.maximumSize = const Size(480, 240).toNative();
+  window.setSize(const Size(480, 240), false);
+  window.minimumSize = const Size(480, 240);
+  window.maximumSize = const Size(480, 240);
   window.isResizable = false;
   if (parent.isEmpty) {
     window.center();
@@ -126,7 +139,7 @@ void configureTaskWindow(Map<String, dynamic> parent) {
       480,
       240,
     );
-    window.bounds = rect.toNative();
+    window.bounds = rect;
   }
   window.title = 'HiZip · 操作信息';
 }
@@ -134,8 +147,8 @@ void configureTaskWindow(Map<String, dynamic> parent) {
 void configureSettingsWindow() {
   _window!
     ..title = 'HiZip · 设置'
-    ..minimumSize = const Size(440, 360).toNative();
-  _window!.setSize(const Size(600, 440).toNative(), false);
+    ..minimumSize = const Size(440, 360);
+  _window!.setSize(const Size(600, 440), false);
   _window!.center();
 }
 

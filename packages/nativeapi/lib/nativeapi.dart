@@ -1,0 +1,17 @@
+library;
+
+// Every generated module. The list itself is generated too, so adding a header
+// upstream does not need an edit here.
+export 'src/generated.dart';
+
+// Hand-written additions that sit on top of the generated bindings.
+export 'src/widgets/context_menu_region.dart';
+export 'src/widgets/image_asset.dart';
+export 'src/widgets/drag_to_move_area.dart';
+export 'src/widgets/drag_to_resize_area.dart';
+export 'src/widgets/drag_out_area.dart';
+export 'src/widgets/drop_region.dart';
+
+// HiZip-maintained host services; upstream generated desktop bindings stay separate.
+export 'src/host_services.dart';
+export 'src/window_safe_area.dart';

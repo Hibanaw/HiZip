@@ -3,8 +3,8 @@ description: Finder-inspired archive manager with a native libarchive engine.
 publish_to: none
 version: 0.1.0+1
 environment:
-  sdk: ^3.13.0
-  flutter: ">=3.47.0"
+  sdk: ^3.11.0
+  flutter: ">=3.41.0"
 dependencies:
   flutter:
     sdk: flutter
@@ -20,8 +20,9 @@ dependencies:
     path: packages/hizip_native
   super_drag_and_drop: ^0.9.1
   super_clipboard: ^0.9.1
-  forui: ^0.21.3
-  nativeapi_flutter: ^0.4.1
+  forui: 0.21.3
+  nativeapi:
+    path: packages/nativeapi
   desktop_multi_window: ^0.3.1
   shared_preferences: ^2.5.6
 dev_dependencies:

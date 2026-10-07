@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode, Locale, WidgetsBinding;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'settings_storage.dart';
 
 import '../models/browsing_preferences.dart';
 import '../models/archive_preferences.dart';
@@ -27,59 +27,50 @@ class AppSettings extends ChangeNotifier {
     Future<void> Function(String)? writeBrowsing,
   }) : _readLanguage =
            readLanguage ??
-           (() => SharedPreferencesAsync().getString('appearance.language')),
+           (() => SettingsStorage().getString('appearance.language')),
        _writeLanguage =
            writeLanguage ??
-           ((value) => SharedPreferencesAsync().setString(
-             'appearance.language',
-             value,
-           )),
+           ((value) =>
+               SettingsStorage().setString('appearance.language', value)),
        _readArchive =
            readArchive ??
-           (() => SharedPreferencesAsync().getString('archive.preferences')),
+           (() => SettingsStorage().getString('archive.preferences')),
        _writeArchive =
            writeArchive ??
-           ((value) => SharedPreferencesAsync().setString(
-             'archive.preferences',
-             value,
-           )),
-       _read = read ?? (() => SharedPreferencesAsync().getInt(_key)),
+           ((value) =>
+               SettingsStorage().setString('archive.preferences', value)),
+       _read = read ?? (() => SettingsStorage().getInt(_key)),
        _readTheme =
-           readTheme ??
-           (() => SharedPreferencesAsync().getString('appearance.theme')),
+           readTheme ?? (() => SettingsStorage().getString('appearance.theme')),
        _writeTheme =
            writeTheme ??
-           ((value) =>
-               SharedPreferencesAsync().setString('appearance.theme', value)),
+           ((value) => SettingsStorage().setString('appearance.theme', value)),
        _readDpiScale =
            readDpiScale ??
-           (() => SharedPreferencesAsync().getString('appearance.dpiScale')),
+           (() => SettingsStorage().getString('appearance.dpiScale')),
        _writeDpiScale =
            writeDpiScale ??
            ((value) =>
-               SharedPreferencesAsync().setString('appearance.dpiScale', value)),
+               SettingsStorage().setString('appearance.dpiScale', value)),
        _readHighlight =
            readHighlight ??
-           (() => SharedPreferencesAsync().getString(
+           (() => SettingsStorage().getString(
              'appearance.fileSelectionHighlight',
            )),
        _writeHighlight =
            writeHighlight ??
-           ((value) => SharedPreferencesAsync().setString(
+           ((value) => SettingsStorage().setString(
              'appearance.fileSelectionHighlight',
              value,
            )),
        _readBrowsing =
            readBrowsing ??
-           (() => SharedPreferencesAsync().getString('browsing.preferences')),
+           (() => SettingsStorage().getString('browsing.preferences')),
        _writeBrowsing =
            writeBrowsing ??
-           ((value) => SharedPreferencesAsync().setString(
-             'browsing.preferences',
-             value,
-           )),
-       _write =
-           write ?? ((value) => SharedPreferencesAsync().setInt(_key, value));
+           ((value) =>
+               SettingsStorage().setString('browsing.preferences', value)),
+       _write = write ?? ((value) => SettingsStorage().setInt(_key, value));
   final Future<String?> Function() _readArchive;
   final Future<void> Function(String) _writeArchive;
   ArchivePreferences archive = const ArchivePreferences();

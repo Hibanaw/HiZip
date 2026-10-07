@@ -8,6 +8,7 @@ import 'package:hizip_native/hizip_native.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'harmony_bridge.dart';
 
 import '../models/archive_entry.dart';
 import '../models/preview_limit.dart';
@@ -236,7 +237,9 @@ class ArchiveService {
 
   Future<Directory> _createSession() async {
     final root = temporaryRoot == null
-        ? await getTemporaryDirectory()
+        ? (HarmonyBridge.supported
+              ? Directory(await HarmonyBridge.temporaryDirectory())
+              : await getTemporaryDirectory())
         : Directory(temporaryRoot!);
     await root.create(recursive: true);
     return _session = await root.createTemp('hizip-');
@@ -334,6 +337,10 @@ class ArchiveService {
     ArchiveEntry entry,
   ) async {
     final watched = await prepareExternal(doc, entry);
+    if (HarmonyBridge.supported) {
+      await HarmonyBridge.exportFile(watched.path);
+      return watched;
+    }
     final result = await OpenFilex.open(watched.path);
     if (result.type != ResultType.done) throw StateError(result.message);
     return watched;
@@ -854,8 +861,9 @@ Future<(String, int)> _extractArchive(
     }
     total += e.size < 0 ? 0 : e.size;
   }
-  final root = await Directory(destination)
-      .createTemp('${p.basenameWithoutExtension(doc.path)}-');
+  final root = await Directory(
+    destination,
+  ).createTemp('${p.basenameWithoutExtension(doc.path)}-');
   try {
     final outputs = <String>[];
     final parents = <String>{};
@@ -926,8 +934,9 @@ Future<(String, int)> _extractArchive(
                       e.normalized.startsWith(prefix)))),
     )) {
       if (e.safe && isSafeArchivePath(e.normalized)) {
-        await Directory(p.joinAll([root.path, ...e.normalized.split('/')]))
-            .create(recursive: true);
+        await Directory(
+          p.joinAll([root.path, ...e.normalized.split('/')]),
+        ).create(recursive: true);
       }
     }
     return (root.path, selected.length);

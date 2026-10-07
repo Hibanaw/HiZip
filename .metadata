@@ -34,6 +34,10 @@ migration:
       create_revision: 90673a4eef275d1a6692c26ac80d6d746d41a73a
       base_revision: 90673a4eef275d1a6692c26ac80d6d746d41a73a
 
+    - platform: ohos
+      create_revision: adaf911c35c9136a7d18fc424d714c9ec7724e60
+      base_revision: adaf911c35c9136a7d18fc424d714c9ec7724e60
+
   # User provided section
 
   # List of Local paths (relative to this file) that should be

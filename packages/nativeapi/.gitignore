@@ -1,0 +1,6 @@
+ohos/oh_modules/
+ohos/build/
+ohos/.hvigor/
+oh-package-lock.json5
+.dart_tool/
+build/

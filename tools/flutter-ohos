@@ -24,4 +24,16 @@ if [[ ! -x "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/flutter" ]]; then
   echo "Missing Flutter OH SDK: $HIZIP_ROOT/.toolchains/flutter-ohos" >&2
   exit 1
 fi
+if [[ -f "$HIZIP_ROOT/ohos/build-profile.template.json5" && ! -f "$HIZIP_ROOT/ohos/build-profile.json5" ]]; then
+  cp "$HIZIP_ROOT/ohos/build-profile.template.json5" "$HIZIP_ROOT/ohos/build-profile.json5"
+fi
+if [[ -f "$HIZIP_ROOT/tools/prepare-forui-ohos.py" && ( ! -d "$HIZIP_ROOT/.toolchains/forui-ohos" || ! -f "$HIZIP_ROOT/pubspec_overrides.yaml" ) ]]; then
+  case "${1:-}" in
+    build|run|test|analyze|pub)
+      (cd "$HIZIP_ROOT" && "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/dart" pub cache add forui --version 0.21.3)
+      python3 "$HIZIP_ROOT/tools/prepare-forui-ohos.py"
+      (cd "$HIZIP_ROOT" && "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/flutter" pub get)
+      ;;
+  esac
+fi
 exec "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/flutter" "$@"

@@ -4,6 +4,7 @@ import 'models/app_language.dart';
 import 'ui/app_localizations.dart';
 
 import 'package:flutter/material.dart';
+import 'package:nativeapi/nativeapi.dart' show NativeSafeArea, NativePlatform;
 
 import 'ui/archive_app.dart';
 import 'ui/dpi_scale.dart';
@@ -49,7 +50,14 @@ class HiZipApp extends StatelessWidget {
         languageCode: Localizations.localeOf(context).languageCode,
         child: DpiScale(
           scale: AppSettings.instance.dpiScale,
-          child: foruiBuilder(context, child),
+          child: NativeSafeArea(
+            backgroundColor: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+            left:
+                !NativePlatform.isHarmonyOS ||
+                MediaQuery.sizeOf(context).shortestSide < 600,
+            bottom: false,
+            child: foruiBuilder(context, child),
+          ),
         ),
       ),
       scrollBehavior: const DesktopScrollBehavior(),
