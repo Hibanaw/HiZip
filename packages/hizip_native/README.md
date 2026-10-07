@@ -1,29 +1,32 @@
 # hizip_native
 
-Shared C archive engine for HiZip. Compression is handled by libarchive;
-Dart provides UTF-8 FFI ownership and off-UI-isolate execution.
+HiZip 的原生压缩引擎，使用 libarchive 解析、解压和创建压缩包。Dart 层提供 FFI 内存管理与后台执行接口。
 
-`NativeArchive.list`, `extract`, `replace`, `update`, and `create` expose the engine.
-Every C result is owned JSON and must be released with `hz_free`.
-Outputs must be fresh files. Rewriting never changes the source archive.
-Only unencrypted ZIP is writable in v0.1.
-`update` streams retained entries and appends a batch of files/directories into a
-fresh ZIP, omitting explicitly moved source entries. Flutter verifies input and
-archive snapshots before the coordinated commit; failed batches leave the source intact.
+## 接口
 
-macOS also registers `dev.hizip/native_files` for system file/application icons,
-default application lookup, available application enumeration, Quick Look, sandbox-compatible staging and coordinated
-atomic replacement. The macOS host window inherits `HizipPreviewWindow` so the
-system preview panel can acquire its controller through the window responder chain.
-Quick Look sends navigation events back to Flutter and previews the same tracked
-temporary files used for external editing.
-`applicationsForFile` returns compatible applications with icons and the default
-application marked. `chooseApplication` presents the system app picker; `openWith`
-opens the monitored temporary file in the chosen app without changing system defaults.
-The channel also starts AppKit file URL drag sessions and forwards file-manager
-copy/paste/select-all shortcuts when the file workspace has focus. Apple builds
-use the system libarchive;
-other native builds compile the pinned upstream source archive via CMake.
+`NativeArchive` 提供 `list`、`extract`、`replace`、`update` 和 `create`。
 
-See the root README for platform status, limits and test commands, and
-`third_party/README.md` for provenance and licensing.
+- C 接口返回由调用方拥有的 JSON 结果，使用 `hz_free` 释放。
+- 提取目标必须是新文件，避免覆盖已有内容。
+- 更新操作写入独立输出文件，不直接修改原包。应用服务层负责校验、备份和提交替换。
+- 支持 ZIP、7z、TAR、压缩 TAR 和 CPIO 的创建与更新，以及 gzip、bzip2、xz、LZMA 单文件压缩。
+- 格式与编解码能力由目标平台的 libarchive 构建决定。
+
+## 平台集成
+
+Apple 平台使用系统 libarchive。Windows、Linux 和 Android 通过 CMake 编译仓库内固定版本的上游源码；额外 codecs 由构建依赖决定。
+
+macOS 插件还提供系统文件图标、应用查询、Quick Look、文件拖拽、菜单和沙盒内文件替换接口。Quick Look 与外部编辑复用受监控的临时文件。
+
+## 构建与测试
+
+通过 Flutter 项目构建时，原生库随平台工程编译。也可以单独构建 C 引擎：
+
+```sh
+cmake -S packages/hizip_native/src -B build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native --target hizip_native
+```
+
+以上命令在 HiZip 仓库根目录执行。测试时通过 `HIZIP_NATIVE_LIBRARY` 指向对应平台的动态库。
+
+格式、使用方式和测试入口见 [项目 README](../../README.md)。源码来源与授权见 [third_party/README.md](third_party/README.md) 和 [libarchive LICENSE](src/vendor/LIBARCHIVE-LICENSE)。
