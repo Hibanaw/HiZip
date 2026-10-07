@@ -229,7 +229,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       openArchive: loadArchive,
       clearRecent: () => setState(recent.clear),
     );
-    unawaited(loadRecentArchives());
+    unawaited(initializeArchives());
     fileFocus.addListener(syncFileCommands);
     searchFocus.addListener(syncFileCommands);
     WidgetsBinding.instance.addObserver(this);
@@ -387,6 +387,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       }
     }
     if (command == 'inspector') toggleInspector();
+  }
+
+  Future<void> initializeArchives() async {
+    await loadRecentArchives();
+    final paths = await desktop.initialArchivePaths();
+    for (final path in paths) {
+      if (!mounted || closing) return;
+      await loadArchive(path);
+    }
   }
 
   Future<void> loadRecentArchives() async {
@@ -1798,7 +1807,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         return KeyEventResult.handled;
       }
     }
-    if (event.logicalKey == LogicalKeyboardKey.space &&
+    if (desktop.supportsQuickLook &&
+        event.logicalKey == LogicalKeyboardKey.space &&
         !keys.isMetaPressed &&
         !keys.isControlPressed &&
         !keys.isAltPressed) {
@@ -1956,31 +1966,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     if (searchFocus.hasFocus ||
         selected == null ||
         selected!.directory ||
-        busy) {
+        busy ||
+        !desktop.supportsQuickLook) {
       return;
     }
-    if (desktop.supportsQuickLook) {
-      try {
-        if (openingSystemPreview || await desktop.quickLookVisible()) {
-          ++systemPreviewRequest;
-          openingSystemPreview = false;
-          await desktop.closeQuickLook();
-        } else {
-          await showSystemPreview(selected!, previewRequest);
-        }
-      } catch (e) {
-        if (mounted) message('系统预览失败：$e', error: true);
+    try {
+      if (openingSystemPreview || await desktop.quickLookVisible()) {
+        ++systemPreviewRequest;
+        openingSystemPreview = false;
+        await desktop.closeQuickLook();
+      } else {
+        await showSystemPreview(selected!, previewRequest);
       }
-      return;
+    } catch (e) {
+      if (mounted) message('系统预览失败：$e', error: true);
     }
-    final e = selected!;
-    if (preview == null && previewError == null) {
-      await select(e, forcePreview: true);
-    }
-    if (!mounted) return;
-    setState(() => inspector = true);
-    if (MediaQuery.sizeOf(context).width < 900) changeView('gallery');
-    saveBrowsingPreferences();
   }
 
   @override
@@ -2365,7 +2365,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     onOpen: busy || (!entry.directory && !entry.canExtract)
         ? null
         : () => openEntry(entry),
-    onPreview: busy || !entry.canExtract ? null : quickLook,
+    onPreview: desktop.supportsQuickLook && !busy && entry.canExtract
+        ? quickLook
+        : null,
     onCopy: busy || !entry.safe ? null : copyFiles,
     onPaste: busy || !document!.writable
         ? null
@@ -2389,7 +2391,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     onOpenWith: busy || !desktop.supportsQuickLook || !entry.canExtract
         ? null
         : (app) => openEntry(entry, application: app),
-    onChooseApplication: busy ? null : () => chooseOpenApplication(entry),
+    onChooseApplication: busy || !desktop.supportsQuickLook
+        ? null
+        : () => chooseOpenApplication(entry),
     onTouchDragStart:
         !busy &&
             !closing &&

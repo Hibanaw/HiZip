@@ -2,6 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import 'linux_file_association_stub.dart'
+    if (dart.library.io) 'linux_file_association_io.dart'
+    as linux;
+
 class DefaultApplication {
   const DefaultApplication(this.name, this.icon);
   final String name;
@@ -19,7 +23,7 @@ class FileApplication extends DefaultApplication {
   final bool isDefault;
 }
 
-/// AppKit presentation APIs stay separate from archive algorithms and the web
+/// Native desktop APIs stay separate from archive algorithms and the web
 /// implementation. Missing platform support leaves the regular Flutter UI usable.
 class DesktopIntegration {
   bool? lastDragSucceeded;
@@ -28,6 +32,10 @@ class DesktopIntegration {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsQuickLook =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+  bool get supportsDefaultApplication =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux);
   final _icons = <String, Future<Uint8List?>>{};
   final _applications = <String, Future<DefaultApplication?>>{};
   final _handlers = <String, Future<List<FileApplication>>>{};
@@ -123,9 +131,16 @@ class DesktopIntegration {
   }
 
   Future<int> setDefaultArchiveHandler() async {
-    if (!supportsQuickLook) throw UnsupportedError('仅 macOS 支持此操作');
-    return await channel.invokeMethod<int>('setDefaultArchiveHandler') ?? 0;
+    if (supportsQuickLook) {
+      return await channel.invokeMethod<int>('setDefaultArchiveHandler') ?? 0;
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+      return linux.setDefaultArchiveHandler();
+    }
+    throw UnsupportedError('当前平台不支持设置默认打开方式');
   }
+
+  Future<List<String>> initialArchivePaths() => linux.initialArchivePaths();
 
   Future<void> noteRecentArchive(String path) async {
     if (!supportsQuickLook) return;

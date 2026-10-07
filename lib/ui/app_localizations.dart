@@ -181,8 +181,8 @@ const _english = <String, String>{
   'bzip2（单个文件）': 'bzip2 (single file)',
   'xz（单个文件）': 'xz (single file)',
   'LZMA（单个文件）': 'LZMA (single file)',
-  '可在 Finder 的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。':
-      'Choose HiZip in Finder’s Open With menu. The button below makes HiZip the default app for supported archive formats.',
+  '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。':
+      'Choose HiZip in the system Open With menu. The button below makes HiZip the default app for supported archive formats.',
   '关闭标签页': 'Close Tab',
   '未打开压缩包': 'No archive open',
   '队列为空': 'Queue is empty',

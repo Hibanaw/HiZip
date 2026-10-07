@@ -387,7 +387,7 @@ class _SettingsPageState extends State<SettingsPage>
                                 ),
                                 const SizedBox(height: 10),
                                 const AppText(
-                                  '可在 Finder 的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
+                                  '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
                                   style: TextStyle(fontSize: 12, height: 1.6),
                                 ),
                                 const SizedBox(height: 16),
@@ -395,7 +395,7 @@ class _SettingsPageState extends State<SettingsPage>
                                   onPressed:
                                       associating ||
                                           !DesktopIntegration()
-                                              .supportsQuickLook
+                                              .supportsDefaultApplication
                                       ? null
                                       : () async {
                                           setState(() {

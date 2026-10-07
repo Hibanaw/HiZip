@@ -73,6 +73,11 @@ class FinderDesktop extends DesktopIntegration {
   }
 }
 
+class NonMacDesktop extends DesktopIntegration {
+  @override
+  bool get supportsQuickLook => false;
+}
+
 final document = ArchiveDocument(
   '/sample.zip',
   const [
@@ -89,7 +94,7 @@ void main() {
   Future<void> mount(
     WidgetTester tester,
     FinderService service,
-    FinderDesktop desktop, [
+    DesktopIntegration desktop, [
     AppSettings? preferences,
   ]) async {
     tester.view.physicalSize = const Size(1440, 900);
@@ -417,6 +422,16 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+  testWidgets('context menu omits Quick Look outside macOS', (tester) async {
+    await mount(tester, FinderService(), NonMacDesktop());
+    await tester.tap(
+      find.byKey(const ValueKey('file-root.txt')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('快速查看'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('path and search stay in top bar across window sizes', (
     tester,
   ) async {
