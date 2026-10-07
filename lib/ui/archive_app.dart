@@ -280,6 +280,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   @override
   void initState() {
     super.initState();
+    setWindowClosePreparation(prepareToClose);
     final browsing = settings.browsing;
     grid = browsing.view == 'grid';
     columns = browsing.view == 'columns';
@@ -361,6 +362,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   @override
   void dispose() {
+    setWindowClosePreparation(null);
     settings.removeListener(applySettings);
     feedback.dispose();
     touchDrops.dispose();

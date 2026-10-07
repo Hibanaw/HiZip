@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ffi' as ffi;
 
@@ -7,18 +8,34 @@ import 'package:nativeapi/nativeapi.dart' as native;
 
 import 'desktop_widgets.dart';
 
-bool _enabled = false, _secondary = false;
+bool _enabled = false, _secondary = false, _harmony = false;
 native.Window? _window;
 VoidCallback? _closeSecondary;
+native.NativeHostWindowState? _harmonyState;
 void setTaskWindowCloseAction(VoidCallback action) => _closeSecondary = action;
+void setWindowClosePreparation(Future<void> Function()? prepare) {
+  if (native.NativePlatform.isHarmonyOS) {
+    native.NativeHostWindow.setClosePreparation(prepare);
+  }
+}
 
 /// Resolve and configure the existing Flutter window rather than creating one.
 Future<void> initializeWindowChrome({int? nativePointer}) async {
+  _enabled = false;
+  _harmony = false;
+  _harmonyState = null;
   if (native.NativePlatform.isHarmonyOS) {
     try {
       final host = await native.NativePlatform.hostInfo();
       if (host.capabilities.contains('windowControl')) {
         await native.NativeHostWindow.configure(title: 'HiZip');
+        await native.NativeHostWindow.setDecorVisible(
+          false,
+          height: windowChromeHeight().round(),
+        );
+        _harmonyState = await native.NativeHostWindow.state();
+        _enabled = true;
+        _harmony = true;
       }
     } on PlatformException catch (error) {
       // Some HarmonyOS device modes do not expose desktop window controls.
@@ -44,25 +61,106 @@ Future<void> initializeWindowChrome({int? nativePointer}) async {
   _enabled = true;
 }
 
-Widget windowDragArea(Widget child) =>
-    !_enabled ? child : native.DragToMoveArea(window: _window, child: child);
+Widget windowDragArea(Widget child) => _harmony
+    ? _HarmonyDragArea(child: child)
+    : !_enabled
+    ? child
+    : native.DragToMoveArea(window: _window, child: child);
 
 double windowChromeHeight() => 49;
 
 Widget windowResizeArea(Widget child) =>
-    !_enabled || _secondary || Platform.isMacOS
+    !_enabled || _harmony || _secondary || Platform.isMacOS
     ? child // AppKit retains the system resize edges and rounded window corners.
     : native.DragToResizeArea(window: _window, resizeEdgeSize: 5, child: child);
 
-Widget windowLeadingControls() => _enabled && Platform.isMacOS
+Widget windowLeadingControls() => _enabled && !_harmony && Platform.isMacOS
     ? const SizedBox(
         width: 88,
       ) // Real NSWindow traffic lights overlay this area.
     : const SizedBox.shrink();
 
-Widget windowTrailingControls() => _enabled && !Platform.isMacOS
-    ? _WindowControls(window: _window!)
+Widget windowTrailingControls() => _enabled && (_harmony || !Platform.isMacOS)
+    ? _harmony
+          ? const _HarmonySystemControlsSpace()
+          : _WindowControls(window: _window!)
     : const SizedBox.shrink();
+
+class _HarmonyDragArea extends StatelessWidget {
+  const _HarmonyDragArea({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.translucent,
+    onPanStart: (_) =>
+        unawaited(_harmonyWindowAction(native.NativeHostWindow.startMoving)),
+    onDoubleTap: () => unawaited(
+      _harmonyWindowAction(() async {
+        final state = await native.NativeHostWindow.state();
+        if (state.isMaximized || state.isFullScreen) {
+          await native.NativeHostWindow.restore();
+        } else {
+          await native.NativeHostWindow.maximize();
+        }
+      }),
+    ),
+    child: child,
+  );
+}
+
+Future<void> _harmonyWindowAction(Future<void> Function() action) async {
+  try {
+    await action();
+  } catch (error) {
+    debugPrint('Harmony window action unavailable: $error');
+  }
+}
+
+class _HarmonySystemControlsSpace extends StatefulWidget {
+  const _HarmonySystemControlsSpace();
+
+  @override
+  State<_HarmonySystemControlsSpace> createState() =>
+      _HarmonySystemControlsSpaceState();
+}
+
+class _HarmonySystemControlsSpaceState
+    extends State<_HarmonySystemControlsSpace> {
+  StreamSubscription<native.NativeHostWindowState>? _changes;
+  native.NativeHostWindowState? _state;
+
+  @override
+  void initState() {
+    super.initState();
+    _state = _harmonyState;
+    _changes = native.NativeHostWindow.changes.listen(
+      (state) {
+        if (mounted) {
+          setState(() => _state = state);
+        }
+      },
+      onError: (Object error) =>
+          debugPrint('Harmony window state unavailable: $error'),
+    );
+  }
+
+  @override
+  void dispose() {
+    _changes?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final buttons = _state?.titleButtons;
+    return SizedBox(
+      key: const ValueKey('harmony-system-controls-space'),
+      width: buttons == null ? 128 : buttons.width + buttons.right,
+    );
+  }
+}
 
 class _WindowControls extends StatefulWidget {
   const _WindowControls({required this.window});
