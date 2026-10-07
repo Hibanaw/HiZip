@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+HIZIP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HIZIP_DEFAULT_TOOL_HOME="/Applications/DevEco-Studio.app/Contents"
+if [[ -x "$HIZIP_ROOT/.toolchains/command-line-tools/tool/node/bin/node" ]]; then
+  HIZIP_DEFAULT_TOOL_HOME="$HIZIP_ROOT/.toolchains/command-line-tools"
+fi
+export TOOL_HOME="${HIZIP_DEVECO_HOME:-$HIZIP_DEFAULT_TOOL_HOME}"
+export DEVECO_SDK_HOME="$TOOL_HOME/sdk"
+export JAVA_HOME="${HIZIP_JAVA_HOME:-/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home}"
+if [[ -d "$TOOL_HOME/tool/node" ]]; then
+  export DEVECO_NODE_HOME="$TOOL_HOME/tool/node"
+  HIZIP_TOOL_PATH="$TOOL_HOME/bin:$DEVECO_NODE_HOME/bin:$TOOL_HOME/ohpm/bin:$TOOL_HOME/hvigor/bin"
+else
+  export DEVECO_NODE_HOME="$TOOL_HOME/tools/node"
+  HIZIP_TOOL_PATH="$DEVECO_NODE_HOME/bin:$TOOL_HOME/tools/ohpm/bin:$TOOL_HOME/tools/hvigor/bin"
+fi
+export NODE_HOME="$DEVECO_NODE_HOME"
+export PUB_CACHE="$HIZIP_ROOT/.toolchains/pub-cache"
+export PUB_HOSTED_URL="https://pub.flutter-io.cn"
+export FLUTTER_STORAGE_BASE_URL="https://storage.flutter-io.cn"
+export PATH="$HIZIP_ROOT/.toolchains/flutter-ohos/bin:$HIZIP_TOOL_PATH:$TOOL_HOME/sdk/default/openharmony/toolchains:$JAVA_HOME/bin:$PATH"
+if [[ ! -x "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/flutter" ]]; then
+  echo "Missing Flutter OH SDK: $HIZIP_ROOT/.toolchains/flutter-ohos" >&2
+  exit 1
+fi
+exec "$HIZIP_ROOT/.toolchains/flutter-ohos/bin/flutter" "$@"

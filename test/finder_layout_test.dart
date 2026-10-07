@@ -1,0 +1,444 @@
+import 'package:hizip/ui/desktop_widgets.dart';
+
+import 'dart:io';
+
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hizip/models/archive_entry.dart';
+import 'package:hizip/models/extraction_progress.dart';
+import 'package:hizip/services/archive_service.dart';
+import 'package:hizip/services/app_settings.dart';
+import 'package:hizip/models/selection_highlight.dart';
+import 'package:hizip/services/desktop_integration.dart';
+import 'package:hizip/ui/archive_app.dart';
+import 'package:hizip/ui/file_item_surface.dart';
+
+class FinderService extends ArchiveService {
+  String? prepared;
+  ArchiveDocument? extractionDocument;
+  ArchiveEntry? extractionEntry;
+  @override
+  Future<String> extract(
+    ArchiveDocument doc,
+    String destination, {
+    ArchiveEntry? entry,
+    void Function(int, int)? progress,
+    void Function(ExtractionProgress)? detailedProgress,
+  }) async {
+    extractionDocument = doc;
+    extractionEntry = entry;
+    return '/tmp/extracted';
+  }
+
+  @override
+  Future<Uint8List> preview(ArchiveDocument doc, ArchiveEntry entry) async =>
+      Uint8List.fromList('hello'.codeUnits);
+  @override
+  Future<OpenedArchiveFile> prepareExternal(
+    ArchiveDocument doc,
+    ArchiveEntry entry,
+  ) async {
+    prepared = entry.path;
+    return OpenedArchiveFile(
+      doc.path,
+      entry.path,
+      '/tmp/edit.txt',
+      '',
+      '',
+      FileStat.statSync('/tmp'),
+    );
+  }
+}
+
+class FinderDesktop extends DesktopIntegration {
+  String? openedPath, application;
+  @override
+  bool get supportsQuickLook => true;
+  @override
+  Future<List<FileApplication>> applicationsForFile(String name) async => [
+    const FileApplication(
+      'TextEdit',
+      null,
+      '/Applications/TextEdit.app',
+      isDefault: true,
+    ),
+    const FileApplication('Test Editor', null, '/Applications/TestEditor.app'),
+  ];
+  @override
+  Future<void> openWith(String path, FileApplication app) async {
+    openedPath = path;
+    application = app.path;
+  }
+}
+
+final document = ArchiveDocument(
+  '/sample.zip',
+  const [
+    ArchiveEntry(path: 'docs/nested/a.txt', size: 5, directory: false),
+    ArchiveEntry(path: 'docs/readme.txt', size: 5, directory: false),
+    ArchiveEntry(path: 'empty/', size: 0, directory: true),
+    ArchiveEntry(path: 'root.txt', size: 5, directory: false),
+  ],
+  'ZIP',
+  true,
+);
+
+void main() {
+  Future<void> mount(
+    WidgetTester tester,
+    FinderService service,
+    FinderDesktop desktop, [
+    AppSettings? preferences,
+  ]) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          DesktopIntegration.channel,
+          (_) async => null,
+        );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    final settings =
+        preferences ?? AppSettings(read: () async => null, write: (_) async {});
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: foruiBuilder,
+        home: ArchiveWorkspace(
+          settings: settings,
+          initialDocument: document,
+          service: service,
+          desktop: desktop,
+          enableNativeTransfers: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('extract actions include selected folders and multiple items', (
+    tester,
+  ) async {
+    const picker = MethodChannel('plugins.flutter.io/file_selector');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      picker,
+      (_) async => '/tmp',
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        picker,
+        null,
+      ),
+    );
+    final service = FinderService();
+    await mount(tester, service, FinderDesktop());
+    await tester.tap(find.byKey(const ValueKey('file-docs')));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.tap(find.byKey(const ValueKey('file-root.txt')));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('selection-extract')));
+    await tester.pumpAndSettle();
+    expect(service.extractionDocument!.entries.map((e) => e.path), [
+      'docs/nested/a.txt',
+      'docs/readme.txt',
+      'root.txt',
+    ]);
+    expect(service.extractionEntry, isNull);
+    await tester.tap(find.byTooltip('预览栏'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('selection-strip')),
+        matching: find.text('2 个项目'),
+      ),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.byKey(const ValueKey('file-docs')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('selection-open')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('selection-extract')));
+    await tester.pumpAndSettle();
+    expect(service.extractionEntry!.normalized, 'docs');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('equal row heights, inspector anchors and draggable sidebars', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    final rowHeight = tester
+        .getSize(find.byKey(const ValueKey('file-docs')))
+        .height;
+    expect(rowHeight, inInclusiveRange(28, 42));
+    for (final path in ['docs', 'empty/', 'root.txt']) {
+      expect(
+        tester.getSize(find.byKey(ValueKey('file-$path'))).height,
+        rowHeight,
+      );
+    }
+    await tester.tap(find.byKey(const ValueKey('file-root.txt')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('selection-strip')), findsNothing);
+    final panel = tester.getRect(find.byKey(const ValueKey('inspector-panel')));
+    final preview = tester.getRect(
+      find.byKey(const ValueKey('inspector-preview')),
+    );
+    final information = tester.getRect(
+      find.byKey(const ValueKey('inspector-information')),
+    );
+    expect(preview.top, panel.top + 16);
+    expect(information.bottom, panel.bottom - 16);
+    final left = find.byKey(const ValueKey('sidebar-resizer'));
+    final oldLeft = tester.getCenter(left).dx;
+    await tester.drag(left, const Offset(60, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(left).dx, greaterThan(oldLeft + 30));
+    final right = find.byKey(const ValueKey('inspector-resizer'));
+    final oldRight = tester.getCenter(right).dx;
+    await tester.drag(right, const Offset(-60, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(right).dx, lessThan(oldRight - 30));
+    await tester.tap(find.byTooltip('预览栏'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('selection-strip')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('multiple selections show a combined Finder-style summary', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    await tester.tap(find.byKey(const ValueKey('file-root.txt')));
+    await tester.pumpAndSettle();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.tap(find.byKey(const ValueKey('file-empty/')));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('2 个项目'), findsOneWidget);
+    expect(find.text('1 个文件、1 个文件夹'), findsOneWidget);
+    expect(find.text('在默认应用中打开'), findsNothing);
+    BoxDecoration selectionBox(String path) =>
+        tester
+                .widget<DecoratedBox>(
+                  find
+                      .descendant(
+                        of: find.byKey(ValueKey('file-$path')),
+                        matching: find.byType(DecoratedBox),
+                      )
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    final first = selectionBox('empty/').borderRadius! as BorderRadius;
+    final last = selectionBox('root.txt').borderRadius! as BorderRadius;
+    expect(first.topLeft, const Radius.circular(5));
+    expect(first.bottomLeft, Radius.zero);
+    expect(last.topLeft, Radius.zero);
+    expect(last.bottomLeft, const Radius.circular(5));
+    expect(
+      find.byKey(const ValueKey('selection-divider-empty')),
+      findsOneWidget,
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    final deselect = await tester.createGesture();
+    await deselect.down(
+      tester.getCenter(find.byKey(const ValueKey('file-empty/'))),
+      timeStamp: const Duration(seconds: 1),
+    );
+    await deselect.up(timeStamp: const Duration(seconds: 1));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(selectionBox('root.txt').borderRadius, BorderRadius.circular(5));
+    expect(find.byKey(const ValueKey('selection-divider-empty')), findsNothing);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.tap(find.byKey(const ValueKey('file-docs')));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(selectionBox('docs').borderRadius, BorderRadius.circular(5));
+    expect(selectionBox('root.txt').borderRadius, BorderRadius.circular(5));
+
+    expect(find.byKey(const ValueKey('selection-extract')), findsOneWidget);
+    expect(find.byKey(const ValueKey('selection-open')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+    final singleClick = await tester.createGesture();
+    await singleClick.down(
+      tester.getCenter(find.byKey(const ValueKey('file-root.txt'))),
+      timeStamp: const Duration(seconds: 2),
+    );
+    await singleClick.up(timeStamp: const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(find.text('2 个项目'), findsNothing);
+    expect(
+      tester
+          .widget<FileItemSurface>(find.byKey(const ValueKey('file-docs')))
+          .selected,
+      isFalse,
+    );
+    expect(
+      tester
+          .widget<FileItemSurface>(find.byKey(const ValueKey('file-root.txt')))
+          .selected,
+      isTrue,
+    );
+    await tester.tap(find.byTooltip('预览栏'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('selection-strip')), findsOneWidget);
+    expect(find.byKey(const ValueKey('selection-extract')), findsOneWidget);
+    expect(find.byTooltip('系统预览（空格）'), findsNothing);
+    expect(find.byTooltip('复制'), findsNothing);
+    expect(find.byTooltip('粘贴'), findsNothing);
+    expect(find.byTooltip('文件名编码'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('columns retain ancestors and single clicks reveal children', (
+    tester,
+  ) async {
+    final settings = AppSettings(
+      read: () async => null,
+      write: (_) async {},
+      writeHighlight: (_) async {},
+    );
+    await mount(tester, FinderService(), FinderDesktop(), settings);
+    await tester.tap(find.byTooltip('多栏视图'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-docs')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('column-')), findsOneWidget);
+    expect(find.byKey(const ValueKey('column-docs')), findsOneWidget);
+    expect(
+      tester
+          .widget<FileItemSurface>(find.byKey(const ValueKey('file-docs')))
+          .activeSelection,
+      false,
+    );
+    await tester.tap(find.byKey(const ValueKey('file-docs/nested')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('column-docs/nested')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('file-docs/nested/a.txt')));
+    await tester.pumpAndSettle();
+    final file = find.byKey(const ValueKey('file-docs/nested/a.txt'));
+    expect(tester.widget<FileItemSurface>(file).activeSelection, true);
+    expect(
+      tester.widget<FileItemSurface>(file).selectionHighlight,
+      SelectionHighlight.blue,
+    );
+    expect(
+      tester
+          .widget<FileItemSurface>(
+            find.byKey(const ValueKey('file-docs/nested')),
+          )
+          .activeSelection,
+      false,
+    );
+    await settings.setSelectionHighlight(SelectionHighlight.neutral);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<FileItemSurface>(file).selectionHighlight,
+      SelectionHighlight.neutral,
+    );
+    final box =
+        tester
+                .widget<DecoratedBox>(
+                  find
+                      .descendant(of: file, matching: find.byType(DecoratedBox))
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    expect(box.color, desktopSelectionBackground(tester.element(file)));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    final selected = tester.widget<FileItemSurface>(
+      find.byKey(const ValueKey('file-docs/nested')),
+    );
+    expect(selected.selected, isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets(
+    'context menu opens with chosen app through monitored temporary file',
+    (tester) async {
+      final service = FinderService(), desktop = FinderDesktop();
+      await mount(tester, service, desktop);
+      await tester.tap(
+        find.byKey(const ValueKey('file-root.txt')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('快速查看'), findsOneWidget);
+      await tester.tap(find.text('打开方式'));
+      await tester.pumpAndSettle();
+      expect(find.text('TextEdit（默认）'), findsOneWidget);
+      await tester.tap(find.text('Test Editor'));
+      await tester.pumpAndSettle();
+      expect(service.prepared, 'root.txt');
+      expect(desktop.openedPath, '/tmp/edit.txt');
+      expect(desktop.application, '/Applications/TestEditor.app');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets('path and search stay in top bar across window sizes', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    final top = find.byKey(const ValueKey('workspace-top-bar'));
+    final path = find.byKey(const ValueKey('path-navigation'));
+    final search = find.byKey(const ValueKey('archive-search'));
+    void checkBar() {
+      expect(find.descendant(of: top, matching: path), findsOneWidget);
+      expect(find.descendant(of: top, matching: search), findsOneWidget);
+      expect(tester.getSize(top).height, 49);
+      expect(tester.getCenter(search).dy, closeTo(tester.getCenter(top).dy, 1));
+      expect(tester.takeException(), isNull);
+    }
+
+    checkBar();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('tree-docs')),
+        matching: find.text('docs'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: path, matching: find.text('docs')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.descendant(of: path, matching: find.text('sample.zip')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: path, matching: find.text('docs')),
+      findsNothing,
+    );
+    for (final width in [800.0, 360.0]) {
+      tester.view.physicalSize = Size(width, 640);
+      await tester.pumpAndSettle();
+      checkBar();
+    }
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('narrow windows retain compact actions without overflow', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    tester.view.physicalSize = const Size(360, 640);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-root.txt')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('inspector-panel')), findsNothing);
+    expect(find.byKey(const ValueKey('selection-strip')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+}
