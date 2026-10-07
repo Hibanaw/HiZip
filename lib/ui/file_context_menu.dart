@@ -9,9 +9,16 @@ import 'package:forui/forui.dart';
 import '../services/desktop_integration.dart';
 
 class DesktopMenuAction {
-  const DesktopMenuAction(this.title, this.onPressed);
+  const DesktopMenuAction(
+    this.title,
+    this.onPressed, {
+    this.children,
+    this.checked = false,
+  });
   final String title;
   final VoidCallback? onPressed;
+  final List<DesktopMenuAction>? children;
+  final bool checked;
 }
 
 /// Forui menus retain desktop keyboard navigation and nested app choices.
@@ -20,6 +27,7 @@ class FileContextMenu extends StatefulWidget {
     super.key,
     required this.child,
     this.childBuilder,
+    this.triggerBuilder,
     this.onSelect,
     this.onOpen,
     this.onPreview,
@@ -40,6 +48,7 @@ class FileContextMenu extends StatefulWidget {
   });
   final Widget child;
   final Widget Function(BuildContext, bool, Widget)? childBuilder;
+  final Widget Function(BuildContext, bool, VoidCallback)? triggerBuilder;
   final List<DesktopMenuAction>? actions;
   final bool enabled, applicationOnly, primaryClick, openUpwards;
   final VoidCallback? onSelect,
@@ -181,14 +190,28 @@ class _FileContextMenuState extends State<FileContextMenu>
     ),
     FItemGroup(children: [item('其他…', widget.onChooseApplication)]),
   ];
+  FItemMixin actionItem(DesktopMenuAction action) =>
+      action.children == null
+      ? item(
+          action.title,
+          action.onPressed,
+          icon: action.checked ? const Icon(Icons.check, size: 14) : null,
+        )
+      : FSubmenuItem(
+          title: AppText(action.title),
+          submenu: [
+            FItemGroup(children: action.children!.map(actionItem).toList()),
+          ],
+          submenuStyle: const FPopoverMenuStyleDelta.delta(
+            motion: FPopoverMotion.none,
+          ),
+        );
+
   List<FItemGroupMixin> menu() {
     if (widget.actions != null) {
       return [
         FItemGroup(
-          children: [
-            for (final action in widget.actions!)
-              item(action.title, action.onPressed),
-          ],
+          children: [for (final action in widget.actions!) actionItem(action)],
         ),
       ];
     }
@@ -281,7 +304,10 @@ class _FileContextMenuState extends State<FileContextMenu>
           onSecondaryTapDown: widget.enabled
               ? (event) => open(event.globalPosition)
               : null,
-          onTapDown: widget.primaryClick && widget.enabled
+          onTapDown:
+              widget.triggerBuilder == null &&
+                  widget.primaryClick &&
+                  widget.enabled
               ? (event) {
                   if (opened == this) {
                     close();
@@ -291,6 +317,13 @@ class _FileContextMenuState extends State<FileContextMenu>
                 }
               : null,
           child:
+              widget.triggerBuilder?.call(context, menuShown, () {
+                if (opened == this) {
+                  close();
+                } else {
+                  open(Offset.zero);
+                }
+              }) ??
               widget.childBuilder?.call(context, menuShown, widget.child) ??
               widget.child,
         ),

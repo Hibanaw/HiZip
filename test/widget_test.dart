@@ -50,6 +50,11 @@ class TestDesktop extends DesktopIntegration {
       const DefaultApplication('TextEdit', null);
 }
 
+class NoMenuBarDesktop extends TestDesktop {
+  @override
+  bool get supportsMenuBar => false;
+}
+
 final sample = ArchiveDocument(
   '/sample.zip',
   const [
@@ -281,6 +286,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('目录'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('application menu is shown without a native menubar', (
+    tester,
+  ) async {
+    size(tester, const Size(1440, 900));
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: foruiBuilder,
+        home: ArchiveWorkspace(
+          enableNativeTransfers: false,
+          initialDocument: sample,
+          service: TestService(),
+          desktop: NoMenuBarDesktop(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('应用菜单'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('application-menu')), findsOneWidget);
+    expect(find.text('文件'), findsOneWidget);
+    expect(find.text('编辑'), findsOneWidget);
+    expect(find.text('显示'), findsOneWidget);
+    expect(find.text('设置…'), findsOneWidget);
+    await tester.tap(find.text('文件'));
+    await tester.pumpAndSettle();
+    expect(find.text('打开…'), findsOneWidget);
+    expect(find.text('创建压缩包'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(

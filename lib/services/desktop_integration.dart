@@ -24,6 +24,8 @@ class FileApplication extends DefaultApplication {
 class DesktopIntegration {
   bool? lastDragSucceeded;
   static const channel = MethodChannel('dev.hizip/native_files');
+  bool get supportsMenuBar =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsQuickLook =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
   final _icons = <String, Future<Uint8List?>>{};

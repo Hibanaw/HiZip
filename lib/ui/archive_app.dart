@@ -220,35 +220,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         activeDrag = armedDrag;
         feedback.action('dismiss');
       },
-      command: (command) {
-        if (command == 'copy') copyFiles();
-        if (command == 'paste') pasteFiles();
-        if (command == 'selectAll') selectAllFiles();
-        if (command == 'settings') openSettings();
-        if (command == 'open') pickArchive();
-        if (command == 'create') createArchive();
-        if (command.startsWith('create:')) {
-          createArchive(format: command.substring(7));
-        }
-        if (command == 'closeArchive') closeTab(document?.path);
-        if (command == 'extract') extract();
-        if (command == 'newFolder') newEntry(directory: true);
-        if (command == 'newDocument') newEntry();
-        if (command == 'delete') deleteSelection();
-        if (command == 'list' ||
-            command == 'grid' ||
-            command == 'columns' ||
-            command == 'gallery') {
-          changeView(command);
-        }
-        if (command.startsWith('encoding:') && document != null) {
-          final encoding = command.substring(9);
-          if (archiveEncodings.containsKey(encoding)) {
-            loadArchive(document!.path, encoding: encoding);
-          }
-        }
-        if (command == 'inspector') toggleInspector();
-      },
+      command: handleMenuCommand,
       openArchive: loadArchive,
       clearRecent: () => setState(recent.clear),
     );
@@ -379,6 +351,36 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     setState(() => inspector = !inspector);
     saveBrowsingPreferences();
     if (inspector && selected != null) select(selected!);
+  }
+
+  void handleMenuCommand(String command) {
+    if (command == 'copy') copyFiles();
+    if (command == 'paste') pasteFiles();
+    if (command == 'selectAll') selectAllFiles();
+    if (command == 'settings') openSettings();
+    if (command == 'open') pickArchive();
+    if (command == 'create') createArchive();
+    if (command.startsWith('create:')) {
+      createArchive(format: command.substring(7));
+    }
+    if (command == 'closeArchive') closeTab(document?.path);
+    if (command == 'extract') extract();
+    if (command == 'newFolder') newEntry(directory: true);
+    if (command == 'newDocument') newEntry();
+    if (command == 'delete') deleteSelection();
+    if (command == 'list' ||
+        command == 'grid' ||
+        command == 'columns' ||
+        command == 'gallery') {
+      changeView(command);
+    }
+    if (command.startsWith('encoding:') && document != null) {
+      final encoding = command.substring(9);
+      if (archiveEncodings.containsKey(encoding)) {
+        loadArchive(document!.path, encoding: encoding);
+      }
+    }
+    if (command == 'inspector') toggleInspector();
   }
 
   Future<void> loadRecentArchives() async {
@@ -2011,37 +2013,39 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                         child: Row(
                                           children: [
                                             Expanded(
-                                              child: document == null
-                                                  ? dropTarget(
-                                                      '',
-                                                      emptyWorkspace(),
-                                                    )
-                                                  : FileContextMenu(
-                                                      onNewFolder:
-                                                          busy ||
-                                                              !document!
-                                                                  .writable
-                                                          ? null
-                                                          : () => newEntry(
-                                                              directory: true,
-                                                            ),
-                                                      onNewDocument:
-                                                          busy ||
-                                                              !document!
-                                                                  .writable
-                                                          ? null
-                                                          : () => newEntry(),
-                                                      onPaste:
-                                                          busy ||
-                                                              !document!
-                                                                  .writable
-                                                          ? null
-                                                          : pasteFiles,
-                                                      child: dropTarget(
-                                                        folder,
-                                                        browser(),
+                                              child: directoryBackground(
+                                                child: document == null
+                                                    ? dropTarget(
+                                                        '',
+                                                        emptyWorkspace(),
+                                                      )
+                                                    : FileContextMenu(
+                                                        onNewFolder:
+                                                            busy ||
+                                                                !document!
+                                                                    .writable
+                                                            ? null
+                                                            : () => newEntry(
+                                                                directory: true,
+                                                              ),
+                                                        onNewDocument:
+                                                            busy ||
+                                                                !document!
+                                                                    .writable
+                                                            ? null
+                                                            : () => newEntry(),
+                                                        onPaste:
+                                                            busy ||
+                                                                !document!
+                                                                    .writable
+                                                            ? null
+                                                            : pasteFiles,
+                                                        child: dropTarget(
+                                                          folder,
+                                                          browser(),
+                                                        ),
                                                       ),
-                                                    ),
+                                              ),
                                             ),
                                             if (inspectorVisible) ...[
                                               splitter(
@@ -2095,14 +2099,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         setState(() => resize(event.delta.dx));
         saveBrowsingPreferences();
       },
-      child: SizedBox(
-        width: 6,
-        child: Center(
-          child: Container(
-            width: 1,
-            color: desktopColor(context, 0xffd8d8d8, 0xff414248),
-          ),
-        ),
+      child: Container(
+        width: 1,
+        color: desktopColor(context, 0xffd8d8d8, 0xff414248),
       ),
     ),
   );
@@ -2641,6 +2640,89 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
+  Widget applicationMenu() {
+    final available = !busy && !closing;
+    final hasDocument = available && document != null;
+    final writable = hasDocument && document!.writable;
+    DesktopMenuAction action(
+      String title,
+      String command,
+      bool enabled, {
+      bool checked = false,
+    }) => DesktopMenuAction(
+      title,
+      enabled ? () => handleMenuCommand(command) : null,
+      checked: checked,
+    );
+    DesktopMenuAction submenu(String title, List<DesktopMenuAction> children) =>
+        DesktopMenuAction(title, null, children: children);
+    return FileContextMenu(
+      key: const ValueKey('application-menu'),
+      primaryClick: true,
+      triggerBuilder: (_, shown, toggle) => Semantics(
+        expanded: shown,
+        child: DesktopIconButton(
+          tooltip: '应用菜单',
+          icon: const Icon(Icons.more_horiz, size: 19),
+          active: shown,
+          onPressed: toggle,
+        ),
+      ),
+      actions: [
+        submenu('文件', [
+          action('打开…', 'open', available),
+          submenu('最近打开', [
+            if (recent.isEmpty) const DesktopMenuAction('暂无最近打开的文件', null),
+            for (final path in recent.take(10))
+              DesktopMenuAction(
+                p.basename(path),
+                available ? () => loadArchive(path) : null,
+              ),
+            DesktopMenuAction('清除菜单', () => setState(recent.clear)),
+          ]),
+          action('创建 ZIP…', 'create', available),
+          submenu('创建压缩包', [
+            for (final format in writableArchiveFormats.entries)
+              action(format.value, 'create:${format.key}', available),
+          ]),
+          action('解压…', 'extract', hasDocument),
+          action('新建文件夹…', 'newFolder', writable),
+          action('新建空白文档…', 'newDocument', writable),
+          action('删除…', 'delete', writable && selectedPaths.isNotEmpty),
+          submenu('编码', [
+            for (final encoding in archiveEncodings.entries)
+              action(
+                encoding.value,
+                'encoding:${encoding.key}',
+                hasDocument,
+                checked: document?.encoding == encoding.key,
+              ),
+          ]),
+          action('关闭标签页', 'closeArchive', hasDocument),
+        ]),
+        submenu('编辑', [
+          action('复制', 'copy', hasDocument && selectedPaths.isNotEmpty),
+          action('粘贴', 'paste', writable),
+          action('全选', 'selectAll', hasDocument),
+        ]),
+        submenu('显示', [
+          action(
+            '列表视图',
+            'list',
+            hasDocument,
+            checked: !grid && !columns && !gallery,
+          ),
+          action('图标视图', 'grid', hasDocument, checked: grid),
+          action('多栏视图', 'columns', hasDocument, checked: columns),
+          action('画廊视图', 'gallery', hasDocument, checked: gallery),
+          action('预览栏', 'inspector', hasDocument, checked: inspector),
+        ]),
+        action('设置…', 'settings', true),
+      ],
+      child: const SizedBox(width: 30, height: 28),
+    );
+  }
+
   Widget toolbar(bool desktopLayout) => LayoutBuilder(
     builder: (context, constraints) {
       final searchWidth = (constraints.maxWidth * .18).clamp(110.0, 180.0);
@@ -2742,6 +2824,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                   ),
                   const SizedBox(width: 8),
                 ],
+                if (!desktop.supportsMenuBar) applicationMenu(),
                 windowTrailingControls(),
               ],
             ),
@@ -2761,6 +2844,41 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     onPressed: action,
     active: active,
     icon: Icon(icon, size: 17),
+  );
+
+  Widget directoryBackground({required Widget child}) => LayoutBuilder(
+    builder: (context, constraints) => Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned(
+          left: 24,
+          right: 24,
+          bottom: 20,
+          child: IgnorePointer(
+            child: ExcludeSemantics(
+              child: Align(
+                alignment: Alignment.bottomRight,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    'HiZip',
+                    textScaler: TextScaler.noScaling,
+                    style: TextStyle(
+                      fontSize: (constraints.maxWidth * .25).clamp(48.0, 144.0),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -4,
+                      height: 1,
+                      color: desktopColor(context, 0x0c000000, 0x14ffffff),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        child,
+      ],
+    ),
   );
 
   Widget emptyWorkspace() => Center(
