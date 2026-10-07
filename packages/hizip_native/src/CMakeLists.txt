@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.18)
+project(hizip_native_library VERSION 0.1.0 LANGUAGES C)
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+add_library(hizip_native SHARED hizip_native.c)
+set_target_properties(hizip_native PROPERTIES PUBLIC_HEADER hizip_native.h OUTPUT_NAME hizip_native)
+# Build the pinned upstream sources; no build-time network download required.
+# Compression libraries are optional upstream capabilities. zlib enables deflate
+# ZIP and gzip; lzma enables xz/7z codecs. Supply cross-compiled libs on Android.
+include(FetchContent)
+set(ENABLE_TEST OFF CACHE BOOL "" FORCE)
+set(ENABLE_TAR OFF CACHE BOOL "" FORCE)
+set(ENABLE_CPIO OFF CACHE BOOL "" FORCE)
+set(ENABLE_CAT OFF CACHE BOOL "" FORCE)
+set(ENABLE_UNZIP OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(ENABLE_WERROR OFF CACHE BOOL "" FORCE)
+set(ENABLE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(ENABLE_MBEDTLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_NETTLE OFF CACHE BOOL "" FORCE)
+set(POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+FetchContent_Declare(libarchive
+  URL "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libarchive-3.8.9.tar.xz"
+  URL_HASH SHA256=888c934f9d95648ecb9163dc8e23ab80a476ecb81a8f1154704a227b5b676dde)
+FetchContent_MakeAvailable(libarchive)
+target_compile_definitions(hizip_native PRIVATE LIBARCHIVE_STATIC)
+target_link_libraries(hizip_native PRIVATE archive_static)
+if(ANDROID)
+  target_link_options(hizip_native PRIVATE "-Wl,-z,max-page-size=16384")
+endif()

@@ -1,0 +1,1 @@
+enum SelectionHighlight { blue, neutral }
