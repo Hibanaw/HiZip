@@ -1,49 +1,78 @@
-# 鸿蒙开发工具
+# 鸿蒙开发与构建
 
-`tools/flutter-ohos` 为 HiZip 的鸿蒙移植工作提供独立 Flutter OH 启动环境。工具链、依赖缓存与构建输出存放在 Git 忽略的 `.toolchains/` 目录中，不修改系统 Flutter SDK。
+`ohos` 分支包含 HarmonyOS `2in1` 工程，包名为 `dev.hizip.hizip`。平台功能由仓库内维护的 [`nativeapi`](../packages/nativeapi/README.md) Flutter 插件实现，原生压缩引擎通过 entry 模块的 CMake 构建。
 
-## 环境要求
+## 已验证环境
 
-- 与项目 `pubspec.yaml` 要求兼容的 Flutter OH SDK。
-- 与该 SDK 版本匹配的 DevEco Studio 或 Command Line Tools、HarmonyOS SDK、Java 和 Node。
-- 平台代码、依赖插件和原生引擎的鸿蒙适配。
-- 真机安装所需的设备连接与开发签名。
+- Flutter OH：`3.41.10-ohos-1.0.1`，Dart 3.11.5，SDK 提交 `adaf911c35`。
+- Mac ARM Command Line Tools：26.0.0.621 Beta2，SDK API 26，Node 24.14.1。
+- Java：DevEco Studio 自带的 JBR 21。
+- 真机：ARM64、API 24，通过无线 hdc 连接。
 
-Flutter OH 工具链可用不代表项目已经完成鸿蒙适配；需要分别验证依赖解析、平台编译和设备运行。
+本分支使用 Dart `^3.11.0`、Flutter `>=3.41.0`，将桌面窗口依赖改为本地维护的 `nativeapi 0.2.7+hizip.1`（桌面 C 绑定固定为 `cnativeapi 0.2.7`）。主分支原有的 Dart 3.13 / Flutter 3.47 要求不能直接用于这一版本的 Flutter OH。桌面窗口 API 已按该依赖版本调整，但本轮没有验证桌面应用运行。
 
-## SDK 布局
+工具链和缓存放在 Git 忽略的 `.toolchains/`，不修改系统 Flutter：
 
 ```text
 .toolchains/
-  flutter-ohos/             Flutter OH SDK
-  command-line-tools/       独立 DevEco 工具包（可选）
-  pub-cache/                鸿蒙开发依赖缓存
+  flutter-ohos/          Flutter OH SDK
+  command-line-tools/    独立 DevEco 工具包
+  pub-cache/             依赖缓存
+  forui-ohos/            自动生成的 ForUI 兼容副本
 ```
 
-Flutter OH SDK 安装到 `.toolchains/flutter-ohos`。使用的社区仓库与版本应匹配项目依赖和对应平台 SDK 的发布要求。
+## 初始化与构建
 
-## 使用
-
-在项目根目录运行：
+准备上述 Flutter OH SDK 和 DevEco 工具包后，在项目根目录运行：
 
 ```sh
 tools/flutter-ohos --version
 tools/flutter-ohos doctor -v
-tools/flutter-ohos devices
 tools/flutter-ohos precache --ohos
+tools/flutter-ohos pub get
+tools/flutter-ohos build hap --release
 ```
 
-脚本优先使用 `.toolchains/command-line-tools`，否则使用 DevEco Studio 的工具目录。可以通过环境变量覆盖路径：
+脚本优先使用 `.toolchains/command-line-tools`，否则使用 `/Applications/DevEco-Studio.app/Contents`。`HIZIP_DEVECO_HOME` 和 `HIZIP_JAVA_HOME` 可覆盖工具与 Java 路径。普通 `flutter` 命令仍使用系统 SDK；本分支请通过包装脚本解析依赖和构建。
 
-| 变量 | 用途 |
-| --- | --- |
-| `HIZIP_DEVECO_HOME` | DevEco 工具目录 |
-| `HIZIP_JAVA_HOME` | Java 安装目录 |
+ForUI 0.21.3 的两处平台枚举分支未覆盖 `ohos`。包装脚本会下载固定版本，复制到本地目录并加入触摸平台回退，再生成忽略的 `pubspec_overrides.yaml`。补丁检查源代码是否符合预期，不修改依赖缓存或 SDK；重新初始化无需手工修改 ForUI。
 
-启动脚本仅为自身及子进程配置环境，普通 `flutter` 命令仍使用系统原有 SDK。
+## 签名与安装
 
-## 适配范围
+第一次运行包装脚本会从 `ohos/build-profile.template.json5` 生成本地 `ohos/build-profile.json5`。在 DevEco Studio 打开 `ohos/`，进入 Project Structure → Signing Configs，登录华为账号并生成调试签名，然后构建。
 
-鸿蒙移植需要处理文件选择与授权、原生插件注册、libarchive 交叉编译、压缩依赖，以及桌面专用接口的替代实现。文件关联、外部编辑和拖拽应按目标平台能力实现。
+本地 `build-profile.json5` 包含签名路径与凭据，已被 Git 忽略。模板不包含签名信息。当前 Release 包使用开发签名供已登记设备测试，并非商店发布签名。
 
-构建前应确认项目已经具备对应的 `ohos/` 平台工程和可用插件。未签名构建可用于检查编译与打包；部署到设备仍需完成签名配置。
+```sh
+hdc tconn 192.168.10.184:42447
+hdc -t 192.168.10.184:42447 install build/ohos/hap/entry-default-signed.hap
+hdc -t 192.168.10.184:42447 shell aa start -b dev.hizip.hizip -a EntryAbility
+```
+
+`hdc` 位于 SDK 的 `default/openharmony/toolchains/`。无线地址与端口可能随设备重新启用调试而变化。
+
+## 文件行为与能力范围
+
+- 使用系统文档选择器打开文件、选择保存位置和解压目标。
+- 选择的文件先复制到应用沙箱，压缩引擎仅处理本地路径，公开文档 URI 留在 ArkTS 层。
+- 压缩包修改发生在沙箱副本中；使用工具栏“保存副本”导出。当前不会自动覆盖最初选择的公开文件。
+- 新建压缩包和解压操作完成后，将结果复制到授权的公开位置。
+- 应用设置通过 HarmonyOS Preferences 保存，缓存通过原生接口获取。
+- 外部打开当前提供文件导出，不支持外部编辑器修改后自动写回。
+- 桌面文件剪贴板、跨应用拖拽、Quick Look 与 macOS 文件关联尚未移植。
+
+当前鸿蒙原生构建包含 zlib，已验证 ZIP 的创建、读取、预览、解压与更新。bzip2、lzma 和 zstd 的交叉编译依赖尚未补齐，因此不能保证所有 7z、xz 等格式的编解码能力。公开目录导出与系统选择器的完整交互流程仍需进一步真机验收。
+
+## 验证
+
+本轮静态分析通过，启用宿主原生引擎后的 128 项测试全部通过。签名 Release 包可安装并启动。真机自检九项全部通过：ZIP 创建、中文文件名、工作 isolate 预览、解压、更新、原生设置存储与删除、运行时能力查询、窗口尺寸读取。插件由 Flutter 自动注册。
+
+```sh
+tools/flutter-ohos analyze --no-pub
+# 使用已构建的宿主原生库执行完整原生回归：
+HIZIP_NATIVE_LIBRARY=/path/to/libhizip_native.dylib tools/flutter-ohos test
+# 构建真机自检入口，安装、启动后通过 HiLog 查看 HIZIP_DEVICE_SMOKE：
+tools/flutter-ohos build hap --debug -t integration_test/ohos_native_smoke.dart
+```
+
+真机自检只处理自建的临时文件，结束后启动正常应用。完成自检后重新构建并安装默认 Release 入口。
