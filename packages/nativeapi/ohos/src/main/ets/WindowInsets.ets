@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { FlutterEngine, FlutterManager, EventSink, StreamHandler, Any } from '@ohos/flutter_ohos';
 
 export class WindowInsetsData {
@@ -49,7 +49,8 @@ export class WindowInsets implements StreamHandler {
       this.unwatch();
       this.host = host;
       host.on('avoidAreaChange', this.onAvoidArea);
-      host.on('windowStatusChange', this.onStatus);
+      if (deviceInfo.sdkApiVersion >= 20) host.on('windowStatusDidChange', this.onStatus);
+      else host.on('windowStatusChange', this.onStatus);
       host.on('windowSizeChange', this.onSize);
       host.on('windowTitleButtonRectChange', this.onTitle);
       this.schedule();
@@ -71,12 +72,16 @@ export class WindowInsets implements StreamHandler {
   private unwatch(): void {
     if (this.timer !== -1) clearTimeout(this.timer);
     this.timer = -1;
-    if (!this.host) return;
-    this.host.off('avoidAreaChange', this.onAvoidArea);
-    this.host.off('windowStatusChange', this.onStatus);
-    this.host.off('windowSizeChange', this.onSize);
-    this.host.off('windowTitleButtonRectChange', this.onTitle);
+    const host = this.host;
     this.host = null;
+    if (!host) return;
+    try { host.off('avoidAreaChange', this.onAvoidArea); } catch (_) {}
+    try {
+      if (deviceInfo.sdkApiVersion >= 20) host.off('windowStatusDidChange', this.onStatus);
+      else host.off('windowStatusChange', this.onStatus);
+    } catch (_) {}
+    try { host.off('windowSizeChange', this.onSize); } catch (_) {}
+    try { host.off('windowTitleButtonRectChange', this.onTitle); } catch (_) {}
   }
   async current(): Promise<WindowInsetsData> {
     if (!this.context) return new WindowInsetsData();

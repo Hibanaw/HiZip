@@ -1,6 +1,6 @@
-import { common } from '@kit.AbilityKit';
+import { common, Want, wantConstant } from '@kit.AbilityKit';
 import { fileIo as fs, picker, fileUri } from '@kit.CoreFileKit';
-import { preferences } from '@kit.ArkData';
+import { preferences, uniformTypeDescriptor } from '@kit.ArkData';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { window } from '@kit.ArkUI';
 import {
@@ -9,6 +9,7 @@ import {
 } from '@ohos/flutter_ohos';
 
 import { WindowInsets } from './WindowInsets';
+import { HostWindow } from './HostWindow';
 
 // Public document URIs stay here. C/FFI and Dart receive private local paths only.
 export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, MethodCallHandler {
@@ -17,6 +18,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   private channel: MethodChannel | null = null;
   private insets: WindowInsets | null = null;
   private insetsChannel: EventChannel | null = null;
+  private hostWindow: HostWindow | null = null;
+  private windowChannel: EventChannel | null = null;
+  private closeChannel: MethodChannel | null = null;
   private abilityContext: common.UIAbilityContext | null = null;
 
   getUniqueClassName(): string { return 'NativeApiPlugin'; }
@@ -26,8 +30,17 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.insets = new WindowInsets(binding.getFlutterEngine());
     this.insetsChannel = new EventChannel(binding.getBinaryMessenger(), 'nativeapi/hizip/windowInsets');
     this.insetsChannel.setStreamHandler(this.insets);
+    this.closeChannel = new MethodChannel(binding.getBinaryMessenger(), 'nativeapi/hizip/windowClose');
+    this.hostWindow = new HostWindow(this.closeChannel);
+    this.windowChannel = new EventChannel(binding.getBinaryMessenger(), 'nativeapi/hizip/windowState');
+    this.windowChannel.setStreamHandler(this.hostWindow);
   }
   onDetachedFromEngine(): void {
+    this.hostWindow?.detach();
+    this.windowChannel?.setStreamHandler(null);
+    this.windowChannel = null;
+    this.hostWindow = null;
+    this.closeChannel = null;
     this.insets?.detach();
     this.insetsChannel?.setStreamHandler(null);
     this.insetsChannel = null;
@@ -40,8 +53,10 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   onAttachedToAbility(binding: AbilityPluginBinding): void {
     this.abilityContext = binding.getAbility().context;
     this.insets?.attach(this.abilityContext);
+    this.hostWindow?.attach(this.abilityContext);
   }
   onDetachedFromAbility(): void {
+    this.hostWindow?.detach();
     this.insets?.detach();
     this.abilityContext = null;
     this.saves.clear();
@@ -58,28 +73,90 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     });
   }
 
-  private localPath(call: MethodCall): string {
-    const path = call.argument('path') as string;
+  private sandboxPath(path: string): string {
+    if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\u0000')) {
+      throw new Error('Invalid file path.');
+    }
     if (!path.startsWith(this.context.filesDir + '/') &&
         !path.startsWith(this.context.cacheDir + '/')) {
       throw new Error('Only application sandbox files can be exported.');
     }
-    if (path.split('/').includes('..')) throw new Error('Invalid file path.');
+    if (path.substring(1).split('/').some((part: string) => part === '..' || part === '.' || part === '')) {
+      throw new Error('Invalid file path.');
+    }
     return path;
   }
 
+  private localPath(call: MethodCall): string {
+    return this.sandboxPath(call.argument('path') as string);
+  }
+
+  private suffixFilters(call: MethodCall): string[] {
+    const values = call.argument('extensions') as string[] | null;
+    if (!values) return [];
+    if (!Array.isArray(values) || values.length > 100) throw new Error('Invalid file extensions.');
+    const suffixes: string[] = [];
+    values.forEach((value: string) => {
+      if (typeof value !== 'string') throw new Error('Invalid file extension.');
+      let suffix = value.trim().toLowerCase();
+      if (!suffix) return;
+      if (!suffix.startsWith('.')) suffix = '.' + suffix;
+      if (!/^\.[a-z0-9]+([._-][a-z0-9]+)*$/.test(suffix)) throw new Error('Invalid file extension.');
+      if (!suffixes.includes(suffix)) suffixes.push(suffix);
+    });
+    return suffixes.length === 0 ? [] : [suffixes.join(',')];
+  }
+
   private name(uri: string): string {
-    const name = decodeURIComponent(uri.substring(uri.lastIndexOf('/') + 1));
-    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+    const segment = uri.substring(uri.lastIndexOf('/') + 1);
+    const name = uri.startsWith('file://') ? decodeURIComponent(segment) : segment;
+    if (!name || name === '.' || name === '..' || /[\/\\\u0000]/.test(name)) {
       throw new Error('Invalid document name.');
     }
     return name;
+  }
+
+  private documentMimeType(path: string, requested: string | null): string {
+    if (requested !== null && requested !== undefined) {
+      if (typeof requested !== 'string' ||
+          !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(requested)) {
+        throw new Error('Invalid MIME type.');
+      }
+      return requested;
+    }
+    const name = this.name(path);
+    const dot = name.lastIndexOf('.');
+    if (dot > 0 && dot < name.length - 1) {
+      try {
+        const typeId = uniformTypeDescriptor.getUniformDataTypeByFilenameExtension(name.substring(dot).toLowerCase());
+        const descriptor = uniformTypeDescriptor.getTypeDescriptor(typeId);
+        if (descriptor && descriptor.mimeTypes.length > 0) return descriptor.mimeTypes[0];
+      } catch (_) {}
+    }
+    return 'application/octet-stream';
   }
 
   private async workspace(): Promise<string> {
     const dir = this.context.filesDir + '/imports/' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
     await fs.mkdir(dir, true);
     return dir;
+  }
+
+  private dimension(call: MethodCall, key: string): number | null {
+    const value = call.argument(key) as number | null;
+    if (value === null || value === undefined) return null;
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 2147483647)) {
+      throw new Error('Window dimensions must be finite and positive.');
+    }
+    return value;
+  }
+
+  private coordinate(call: MethodCall, key: string): number {
+    const value = call.argument(key) as number;
+    if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+      throw new Error('Window coordinates must be signed 32-bit integers.');
+    }
+    return value;
   }
 
   private async copy(source: string, destination: string): Promise<void> {
@@ -92,12 +169,23 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   }
 
   private async validateTree(source: string): Promise<void> {
+    const stat = await fs.lstat(source);
+    if (stat.isFile()) return;
+    if (!stat.isDirectory()) throw new Error('Symbolic links and special files cannot be exported.');
     for (const name of await fs.listFile(source)) {
-      const path = source + '/' + name;
-      const stat = await fs.lstat(path);
-      if (stat.isDirectory()) await this.validateTree(path);
-      else if (!stat.isFile()) throw new Error('Symbolic links and special files cannot be exported.');
+      await this.validateTree(source + '/' + name);
     }
+  }
+
+  private async validateExportPath(path: string): Promise<void> {
+    const base = path.startsWith(this.context.filesDir + '/') ? this.context.filesDir : this.context.cacheDir;
+    const parts = path.substring(base.length + 1).split('/');
+    let current = base;
+    for (const part of parts) {
+      current += '/' + part;
+      if ((await fs.lstat(current)).isSymbolicLink()) throw new Error('Symbolic links cannot be exported.');
+    }
+    await this.validateTree(path);
   }
 
   private async dispatch(call: MethodCall, result: MethodResult): Promise<void> {
@@ -105,31 +193,74 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
       case 'windowInsets':
         result.success(await this.insets?.current()); return;
       case 'hostInfo': {
-        const capabilities: string[] = ['documents', 'preferences', 'cacheDirectory', 'windowState'];
+        const capabilities: string[] = ['documents', 'openWithDefault', 'preferences', 'cacheDirectory', 'supportDirectory', 'windowState', 'windowEvents'];
+        if (canIUse('SystemCapability.FileManagement.UserFileService.FolderSelection')) capabilities.push('directoryImport');
         if (canIUse('SystemCapability.Window.SessionManager')) capabilities.push('windowControl');
         result.success({ deviceType: deviceInfo.deviceType, apiVersion: deviceInfo.sdkApiVersion, capabilities: capabilities });
         return;
       }
-      case 'windowState': {
-        const host = await window.getLastWindow(this.context);
-        const rect = host.getWindowProperties().windowRect;
-        result.success({ x: rect.left, y: rect.top, width: rect.width, height: rect.height, status: host.getWindowStatus() });
-        return;
-      }
+      case 'windowState':
+        result.success(await this.hostWindow?.current()); return;
       case 'configureWindow': {
-        const host = await window.getLastWindow(this.context);
         const title = call.argument('title') as string | null;
+        const minWidth = this.dimension(call, 'minWidth');
+        const minHeight = this.dimension(call, 'minHeight');
+        const maxWidth = this.dimension(call, 'maxWidth');
+        const maxHeight = this.dimension(call, 'maxHeight');
+        if ((minWidth !== null && maxWidth !== null && minWidth > maxWidth) ||
+            (minHeight !== null && maxHeight !== null && minHeight > maxHeight)) {
+          throw new Error('Window minimum dimensions must not exceed maximum dimensions.');
+        }
+        const host = await window.getLastWindow(this.context);
         if (title !== null) await host.setWindowTitle(title);
-        const minWidth = call.argument('minWidth') as number | null;
-        const minHeight = call.argument('minHeight') as number | null;
-        if (minWidth !== null || minHeight !== null) {
+        if (minWidth !== null || minHeight !== null || maxWidth !== null || maxHeight !== null) {
           const limits: window.WindowLimits = {};
           if (minWidth !== null) limits.minWidth = minWidth;
           if (minHeight !== null) limits.minHeight = minHeight;
+          if (maxWidth !== null) limits.maxWidth = maxWidth;
+          if (maxHeight !== null) limits.maxHeight = maxHeight;
           await host.setWindowLimits(limits);
         }
         result.success(null);
         return;
+      }
+      case 'setWindowDecorVisible': {
+        const visible = call.argument('visible') as boolean;
+        if (typeof visible !== 'boolean') throw new Error('Invalid window decoration visibility.');
+        const height = call.argument('height') as number | null;
+        if (height !== null && (typeof height !== 'number' || !Number.isInteger(height) || height < 37 || height > 112)) {
+          throw new Error('Window decoration height must be 37–112 vp.');
+        }
+        const host = await window.getLastWindow(this.context);
+        const previousVisible = host.getWindowDecorVisible();
+        const previousHeight = height === null ? null : host.getWindowDecorHeight();
+        try {
+          if (height !== null) host.setWindowDecorHeight(height);
+          await host.setTitleAndDockHoverShown(visible);
+          host.setWindowDecorVisible(visible);
+        } catch (error) {
+          try {
+            if (previousHeight !== null) host.setWindowDecorHeight(previousHeight);
+            await host.setTitleAndDockHoverShown(previousVisible);
+            host.setWindowDecorVisible(previousVisible);
+          } catch (_) {}
+          throw error as Error;
+        }
+        result.success(null);
+        return;
+      }
+      case 'moveWindow': {
+        const x = this.coordinate(call, 'x');
+        const y = this.coordinate(call, 'y');
+        await (await window.getLastWindow(this.context)).moveWindowTo(x, y);
+        result.success(null); return;
+      }
+      case 'resizeWindow': {
+        const width = this.coordinate(call, 'width');
+        const height = this.coordinate(call, 'height');
+        if (width <= 0 || height <= 0) throw new Error('Window dimensions must be positive.');
+        await (await window.getLastWindow(this.context)).resize(width, height);
+        result.success(null); return;
       }
       case 'minimizeWindow':
         await (await window.getLastWindow(this.context)).minimize(); result.success(null); return;
@@ -152,6 +283,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
       case 'temporaryDirectory':
         result.success(this.context.cacheDir);
         return;
+      case 'applicationSupportDirectory':
+        result.success(this.context.filesDir);
+        return;
       case 'getPreference': {
         const store = await preferences.getPreferences(this.context, 'hizip');
         const key = call.argument('key') as string;
@@ -165,9 +299,12 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success(null);
         return;
       }
+      case 'openFile':
       case 'openFiles': {
         const options = new picker.DocumentSelectOptions();
-        options.maxSelectNumber = 100;
+        options.maxSelectNumber = call.method === 'openFile' ? 1 : 100;
+        const filters = this.suffixFilters(call);
+        if (filters.length > 0) options.fileSuffixFilters = filters;
         const uris = await new picker.DocumentViewPicker(this.context).select(options);
         const paths: string[] = [];
         for (const uri of uris) {
@@ -176,12 +313,37 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
           await this.copy(uri, path);
           paths.push(path);
         }
-        result.success(paths);
+        result.success(call.method === 'openFile' ? (paths.length === 0 ? null : paths[0]) : paths);
+        return;
+      }
+      case 'openDirectory': {
+        const options = new picker.DocumentSelectOptions();
+        options.selectMode = picker.DocumentSelectMode.FOLDER;
+        options.maxSelectNumber = 1;
+        const uris = await new picker.DocumentViewPicker(this.context).select(options);
+        if (uris.length === 0) { result.success(null); return; }
+        const root = await this.workspace();
+        const path = root + '/' + this.name(uris[0]);
+        try {
+          await fs.copy(uris[0], fileUri.getUriFromPath(path));
+          await this.validateTree(path);
+          result.success(path);
+        } catch (error) {
+          try { await fs.rmdir(root); } catch (_) {}
+          throw error as Error;
+        }
         return;
       }
       case 'saveLocation': {
         const options = new picker.DocumentSaveOptions();
-        options.newFileNames = [call.argument('name') as string];
+        const suggestedName = call.argument('name') as string;
+        if (typeof suggestedName !== 'string' || !suggestedName || suggestedName === '.' ||
+            suggestedName === '..' || /[\/\\\u0000]/.test(suggestedName)) {
+          throw new Error('Invalid document name.');
+        }
+        options.newFileNames = [suggestedName];
+        const filters = this.suffixFilters(call);
+        if (filters.length > 0) options.fileSuffixChoices = filters;
         const uris = await new picker.DocumentViewPicker(this.context).save(options);
         if (uris.length === 0) { result.success(null); return; }
         const path = await this.workspace() + '/' + this.name(uris[0]);
@@ -193,6 +355,8 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         const path = this.localPath(call);
         const uri = this.saves.get(path);
         if (!uri) throw new Error('No authorized save location for this file.');
+        await this.validateExportPath(path);
+        if (!(await fs.lstat(path)).isFile()) throw new Error('Save source must be a regular file.');
         await this.copy(path, uri);
         this.saves.delete(path);
         result.success(null);
@@ -212,19 +376,42 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
       case 'finishDirectory': {
         const root = call.argument('root') as string;
         const path = this.localPath(call);
-        const uri = this.directories.get(root);
-        if (!uri || !path.startsWith(root + '/')) throw new Error('Invalid export location.');
+        const checkedRoot = this.sandboxPath(root);
+        const uri = this.directories.get(checkedRoot);
+        if (!uri || !path.startsWith(checkedRoot + '/')) throw new Error('Invalid export location.');
+        if (!(await fs.lstat(path)).isDirectory()) throw new Error('Export source must be a directory.');
         const target = uri + '/' + encodeURIComponent(this.name(path));
-        await this.validateTree(path);
+        await this.validateExportPath(path);
         // mkdir accepts sandbox paths only; copy supports authorized document URIs.
         if (await fs.access(target)) throw new Error('Export directory already exists.');
         await fs.copy(fileUri.getUriFromPath(path), target);
-        this.directories.delete(root);
+        this.directories.delete(checkedRoot);
         result.success(target);
+        return;
+      }
+      case 'openWithDefault': {
+        const path = this.localPath(call);
+        await this.validateExportPath(path);
+        if (!(await fs.lstat(path)).isFile()) throw new Error('Open source must be a regular file.');
+        const writable = call.argument('writable') as boolean | null;
+        if (writable !== null && writable !== undefined && typeof writable !== 'boolean') {
+          throw new Error('Invalid file access mode.');
+        }
+        const want: Want = {
+          action: 'ohos.want.action.viewData',
+          uri: fileUri.getUriFromPath(path),
+          type: this.documentMimeType(path, call.argument('mimeType') as string | null),
+          flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION |
+            (writable ? wantConstant.Flags.FLAG_AUTH_WRITE_URI_PERMISSION : 0),
+        };
+        await this.context.startAbility(want);
+        result.success(null);
         return;
       }
       case 'exportFile': {
         const path = this.localPath(call);
+        await this.validateExportPath(path);
+        if (!(await fs.lstat(path)).isFile()) throw new Error('Export source must be a regular file.');
         const options = new picker.DocumentSaveOptions();
         options.newFileNames = [this.name(path)];
         const uris = await new picker.DocumentViewPicker(this.context).save(options);
