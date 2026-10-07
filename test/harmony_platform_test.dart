@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hizip/models/archive_entry.dart';
+import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/harmony_bridge.dart';
 import 'package:hizip/services/platform_files.dart';
 import 'package:hizip/services/settings_storage.dart';
@@ -29,6 +33,79 @@ void main() {
               return handler(call);
             });
       }
+
+      Future<OpenedArchiveFile> preparedFile() async {
+        final directory = await Directory.systemTemp.createTemp('hizip-open-');
+        addTearDown(() => directory.delete(recursive: true));
+        final file = await File(
+          '${directory.path}/notes.txt',
+        ).writeAsString('HiZip');
+        return OpenedArchiveFile(
+          '/sandbox/archive.zip',
+          'notes.txt',
+          file.path,
+          'file-hash',
+          'archive-hash',
+          await file.stat(),
+        );
+      }
+
+      for (final writable in [false, true]) {
+        test(
+          'archive opening launches the viewer with writable=$writable',
+          () async {
+            respond((call) async => null);
+            final prepared = await preparedFile();
+            final service = _PreparedArchiveService(prepared);
+            const entry = ArchiveEntry(
+              path: 'notes.txt',
+              size: 5,
+              directory: false,
+            );
+            final doc = ArchiveDocument(
+              prepared.archive,
+              [entry],
+              'zip',
+              writable,
+            );
+            expect(await service.open(doc, entry), same(prepared));
+            expect(calls.single.method, 'openWithDefault');
+            expect(calls.single.arguments, {
+              'path': prepared.path,
+              'mimeType': null,
+              'writable': writable,
+            });
+          },
+        );
+      }
+
+      test(
+        'archive opening reports launch failures without exporting',
+        () async {
+          respond(
+            (call) async => throw PlatformException(code: 'nativeapi_16000019'),
+          );
+          final prepared = await preparedFile();
+          final service = _PreparedArchiveService(prepared);
+          const entry = ArchiveEntry(
+            path: 'notes.txt',
+            size: 5,
+            directory: false,
+          );
+          final doc = ArchiveDocument(prepared.archive, [entry], 'zip', true);
+          await expectLater(
+            service.open(doc, entry),
+            throwsA(
+              isA<PlatformException>().having(
+                (error) => error.code,
+                'code',
+                'nativeapi_16000019',
+              ),
+            ),
+          );
+          expect(calls.map((call) => call.method), ['openWithDefault']);
+        },
+      );
 
       test(
         'picker returns sandbox paths without converting document URIs',
@@ -107,4 +184,16 @@ void main() {
     },
     skip: platforms.isEmpty ? 'Requires the HarmonyOS Flutter SDK.' : false,
   );
+}
+
+class _PreparedArchiveService extends ArchiveService {
+  _PreparedArchiveService(this.prepared);
+
+  final OpenedArchiveFile prepared;
+
+  @override
+  Future<OpenedArchiveFile> prepareExternal(
+    ArchiveDocument doc,
+    ArchiveEntry entry,
+  ) async => prepared;
 }

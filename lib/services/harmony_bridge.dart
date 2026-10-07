@@ -8,6 +8,15 @@ class HarmonyBridge {
       NativePaths.temporaryDirectory();
   static Future<bool> exportFile(String path) =>
       NativeDocuments.exportFile(path);
+  static Future<void> openWithDefault(
+    String path, {
+    String? mimeType,
+    bool writable = false,
+  }) => NativeDocuments.openWithDefault(
+    path,
+    mimeType: mimeType,
+    writable: writable,
+  );
   static Future<String> finishDirectory(String root, String output) =>
       NativeDocuments.finishDirectory(root, output);
   static Future<void> finishSave(String path) =>

@@ -338,7 +338,7 @@ class ArchiveService {
   ) async {
     final watched = await prepareExternal(doc, entry);
     if (HarmonyBridge.supported) {
-      await HarmonyBridge.exportFile(watched.path);
+      await HarmonyBridge.openWithDefault(watched.path, writable: doc.writable);
       return watched;
     }
     final result = await OpenFilex.open(watched.path);
