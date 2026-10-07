@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import '../models/task_feedback.dart';
 import 'app_settings.dart';
 import '../ui/settings_page.dart';
+import '../ui/dpi_scale.dart';
 import '../ui/desktop_widgets.dart';
 import '../ui/task_feedback_panel.dart';
 import '../ui/window_chrome.dart';
@@ -91,7 +92,10 @@ Future<Widget?> initializeTaskWindows() async {
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         builder: (context, child) => AppLanguageScope(
           languageCode: Localizations.localeOf(context).languageCode,
-          child: foruiBuilder(context, child),
+          child: DpiScale(
+            scale: settings.dpiScale,
+            child: foruiBuilder(context, child),
+          ),
         ),
         home: windowResizeArea(
           SettingsPage(

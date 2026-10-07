@@ -124,6 +124,26 @@ void main() {
     first.dispose();
     second.dispose();
   });
+
+  test('DPI scale persists and clamps unsafe values', () async {
+    String? stored;
+    AppSettings create() => AppSettings(
+      read: () async => null,
+      write: (_) async {},
+      readDpiScale: () async => stored,
+      writeDpiScale: (value) async => stored = value,
+    );
+    final first = create();
+    await first.setDpiScale(1.25);
+    expect(first.dpiScale, 1.25);
+    final second = create();
+    await second.load();
+    expect(second.dpiScale, 1.25);
+    await second.setDpiScale(2);
+    expect(second.dpiScale, 1.5);
+    first.dispose();
+    second.dispose();
+  });
   test(
     'thread preference persists and invalid values fall back to auto',
     () async {

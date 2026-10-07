@@ -32,6 +32,7 @@ import '../services/archive_task_queue.dart';
 import '../services/queued_archive_service.dart';
 import '../models/task_feedback.dart';
 import 'file_drop_target.dart';
+import 'touch_file_drop_target.dart';
 import '../services/file_transfer_clipboard.dart';
 
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
@@ -77,6 +78,7 @@ class ArchiveWorkspace extends StatefulWidget {
 class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     with WidgetsBindingObserver {
   static const listInset = 6.0;
+  final contentScaffold = GlobalKey<ScaffoldState>();
   late final settings = widget.settings ?? AppSettings.instance;
   final taskQueue = ArchiveTaskQueue();
   late final service = QueuedArchiveService(
@@ -92,6 +94,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   final transferExports = <String, Future<List<String>>>{};
   final fileFocus = FocusNode(debugLabel: 'archive files');
   final searchFocus = FocusNode(debugLabel: 'archive search');
+  bool compactSearchOpen = false;
   final listScroll = ScrollController();
   final columnScroll = ScrollController();
   final columnLists = <String, ScrollController>{};
@@ -140,6 +143,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   bool openingSystemPreview = false;
   (ArchiveDocument, List<ArchiveEntry>)? activeDrag, armedDrag;
+  (ArchiveDocument, List<ArchiveEntry>)? touchDrag;
+  final touchDrops = TouchFileDropController();
   final search = TextEditingController();
   final recent = <String>[];
   final tabs = <_ArchiveTab>[];
@@ -264,6 +269,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   void dispose() {
     settings.removeListener(applySettings);
     feedback.dispose();
+    touchDrops.dispose();
     taskQueue.removeListener(queueChanged);
     timer?.cancel();
     searchTimer?.cancel();
@@ -1512,14 +1518,55 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     }
   }
 
-  Widget dropTarget(String destination, Widget child) =>
-      !widget.enableNativeTransfers
-      ? child
-      : FileDropTarget(
-          operation: (event) => dropOperation(event, destination),
-          perform: (event) => performDrop(event, destination),
-          child: child,
-        );
+  Widget dropTarget(String destination, Widget child) {
+    final touchTarget = TouchFileDropTarget(
+      controller: touchDrops,
+      accepts: () => acceptsTouchDrop(destination),
+      onDrop: () => unawaited(performTouchDrop(destination)),
+      child: child,
+    );
+    return !widget.enableNativeTransfers
+        ? touchTarget
+        : FileDropTarget(
+            operation: (event) => dropOperation(event, destination),
+            perform: (event) => performDrop(event, destination),
+            child: touchTarget,
+          );
+  }
+
+  bool acceptsTouchDrop(String destination) {
+    final drag = touchDrag;
+    if (drag == null ||
+        busy ||
+        closing ||
+        document != drag.$1 ||
+        !drag.$1.writable) {
+      return false;
+    }
+    return drag.$2.every(
+      (entry) =>
+          destination != entry.normalized &&
+          !destination.startsWith('${entry.normalized}/') &&
+          p.posix.dirname(entry.normalized).replaceFirst(RegExp(r'^\.$'), '') !=
+              destination,
+    );
+  }
+
+  Future<void> performTouchDrop(String destination) async {
+    if (!acceptsTouchDrop(destination)) return;
+    final (doc, entries) = touchDrag!;
+    touchDrag = null;
+    await run(() async {
+      final updated = await service.transferEntries(
+        doc,
+        entries,
+        destination,
+        move: true,
+      );
+      refreshDocument(updated);
+      message('已移动 ${entries.length} 个项目');
+    }, title: '正在移动文件');
+  }
 
   Future<void> prepareMacDrag(ArchiveEntry entry, Rect frame) async {
     if (busy || !entry.safe || (!entry.directory && !entry.canExtract)) return;
@@ -1569,6 +1616,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     }
   }
 
+  void startTouchDrag(ArchiveEntry entry) {
+    if (busy || !entry.safe) return;
+    if (!entry.directory && !entry.canExtract) return;
+    final doc = document;
+    if (doc == null) return;
+    final roots = topLevelEntries(
+      selectedPaths.contains(entry.path) ? selection : [entry],
+    );
+    touchDrag = (doc, roots);
+    feedback.action('dismiss');
+    setState(() => status = '拖拽 ${roots.length} 个项目');
+  }
+
   Future<void> startMacDrag(ArchiveEntry entry) async {
     if (busy || !entry.safe || (!entry.directory && !entry.canExtract)) return;
     final doc = document!;
@@ -1603,7 +1663,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget transferable(ArchiveEntry entry, Widget child) {
-    if (!widget.enableNativeTransfers) return child;
+    if (!widget.enableNativeTransfers) {
+      return entry.directory ? dropTarget(entry.normalized, child) : child;
+    }
     if (desktop.supportsQuickLook) {
       return entry.directory ? dropTarget(entry.normalized, child) : child;
     }
@@ -1974,9 +2036,6 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             builder: (_, _) => Stack(
               children: [
                 Scaffold(
-                  drawer: desktopLayout
-                      ? null
-                      : Drawer(width: 240, child: sidebar()),
                   body: NotificationListener<ScrollNotification>(
                     onNotification: (notification) {
                       if (notification is ScrollUpdateNotification) {
@@ -1989,90 +2048,101 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         children: [
                           toolbar(desktopLayout),
                           Expanded(
-                            child: Row(
-                              children: [
-                                if (desktopLayout)
-                                  SizedBox(width: leftWidth, child: sidebar()),
-                                if (desktopLayout)
-                                  splitter(
-                                    'sidebar-resizer',
-                                    (dx) =>
-                                        sidebarWidth = (leftWidth + dx).clamp(
-                                          160.0,
-                                          (constraints.maxWidth * .28).clamp(
+                            child: Scaffold(
+                              key: contentScaffold,
+                              drawer: desktopLayout
+                                  ? null
+                                  : Drawer(width: 240, child: sidebar()),
+                              body: Row(
+                                children: [
+                                  if (desktopLayout)
+                                    SizedBox(
+                                      width: leftWidth,
+                                      child: sidebar(),
+                                    ),
+                                  if (desktopLayout)
+                                    splitter(
+                                      'sidebar-resizer',
+                                      (dx) =>
+                                          sidebarWidth = (leftWidth + dx).clamp(
                                             160.0,
-                                            double.infinity,
+                                            (constraints.maxWidth * .28).clamp(
+                                              160.0,
+                                              double.infinity,
+                                            ),
+                                          ),
+                                    ),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        if (tabs.length > 1) archiveTabs(),
+                                        Expanded(
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: directoryBackground(
+                                                  child: document == null
+                                                      ? dropTarget(
+                                                          '',
+                                                          emptyWorkspace(),
+                                                        )
+                                                      : FileContextMenu(
+                                                          onNewFolder:
+                                                              busy ||
+                                                                  !document!
+                                                                      .writable
+                                                              ? null
+                                                              : () => newEntry(
+                                                                  directory:
+                                                                      true,
+                                                                ),
+                                                          onNewDocument:
+                                                              busy ||
+                                                                  !document!
+                                                                      .writable
+                                                              ? null
+                                                              : () =>
+                                                                    newEntry(),
+                                                          onPaste:
+                                                              busy ||
+                                                                  !document!
+                                                                      .writable
+                                                              ? null
+                                                              : pasteFiles,
+                                                          child: dropTarget(
+                                                            folder,
+                                                            browser(),
+                                                          ),
+                                                        ),
+                                                ),
+                                              ),
+                                              if (inspectorVisible) ...[
+                                                splitter(
+                                                  'inspector-resizer',
+                                                  (dx) => inspectorWidth =
+                                                      (rightWidth - dx).clamp(
+                                                        220.0,
+                                                        (constraints.maxWidth *
+                                                                .32)
+                                                            .clamp(
+                                                              220.0,
+                                                              double.infinity,
+                                                            ),
+                                                      ),
+                                                ),
+                                                SizedBox(
+                                                  width: rightWidth,
+                                                  child: inspectorPanel(),
+                                                ),
+                                              ],
+                                            ],
                                           ),
                                         ),
+                                      ],
+                                    ),
                                   ),
-                                Expanded(
-                                  child: Column(
-                                    children: [
-                                      if (tabs.length > 1) archiveTabs(),
-                                      Expanded(
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: directoryBackground(
-                                                child: document == null
-                                                    ? dropTarget(
-                                                        '',
-                                                        emptyWorkspace(),
-                                                      )
-                                                    : FileContextMenu(
-                                                        onNewFolder:
-                                                            busy ||
-                                                                !document!
-                                                                    .writable
-                                                            ? null
-                                                            : () => newEntry(
-                                                                directory: true,
-                                                              ),
-                                                        onNewDocument:
-                                                            busy ||
-                                                                !document!
-                                                                    .writable
-                                                            ? null
-                                                            : () => newEntry(),
-                                                        onPaste:
-                                                            busy ||
-                                                                !document!
-                                                                    .writable
-                                                            ? null
-                                                            : pasteFiles,
-                                                        child: dropTarget(
-                                                          folder,
-                                                          browser(),
-                                                        ),
-                                                      ),
-                                              ),
-                                            ),
-                                            if (inspectorVisible) ...[
-                                              splitter(
-                                                'inspector-resizer',
-                                                (dx) => inspectorWidth =
-                                                    (rightWidth - dx).clamp(
-                                                      220.0,
-                                                      (constraints.maxWidth *
-                                                              .32)
-                                                          .clamp(
-                                                            220.0,
-                                                            double.infinity,
-                                                          ),
-                                                    ),
-                                              ),
-                                              SizedBox(
-                                                width: rightWidth,
-                                                child: inspectorPanel(),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                           footer(),
@@ -2320,6 +2390,24 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         ? null
         : (app) => openEntry(entry, application: app),
     onChooseApplication: busy ? null : () => chooseOpenApplication(entry),
+    onTouchDragStart:
+        !busy &&
+            !closing &&
+            document!.writable &&
+            entry.safe &&
+            (entry.directory || entry.canExtract)
+        ? () => startTouchDrag(entry)
+        : null,
+    onTouchDragUpdate: touchDrops.update,
+    onTouchDragEnd: (position) {
+      touchDrops.drop(position);
+      touchDrag = null;
+    },
+    onTouchDragCancel: () {
+      touchDrag = null;
+      touchDrops.cancel();
+    },
+    touchDragLabel: entry.name,
     child: Listener(
       onPointerDown: (_) => pointerSelectedItem = true,
       child: child,
@@ -2359,7 +2447,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         ? ''
         : p.posix.dirname(node.path);
     final entry = document!.index.byNormalized[node.path]!;
-    return contextMenu(entry, child, columnParent: parent);
+    return dropTarget(
+      node.path,
+      contextMenu(entry, child, columnParent: parent),
+    );
   }
 
   Widget sidebar() {
@@ -2499,9 +2590,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                                 navigate(node.path);
                                                 focusSidebar();
                                                 fileFocus.requestFocus();
-                                                if (Scaffold.of(context)
-                                                    .isDrawerOpen) {
-                                                  Navigator.pop(context);
+                                                if (contentScaffold
+                                                        .currentState
+                                                        ?.isDrawerOpen ==
+                                                    true) {
+                                                  contentScaffold.currentState
+                                                      ?.closeDrawer();
                                                 }
                                               },
                                         child: Row(
@@ -2743,91 +2837,119 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(child: windowDragArea(const SizedBox.expand())),
-            Row(
-              children: [
-                windowLeadingControls(),
-                if (!desktopLayout)
-                  Builder(
-                    builder: (context) => tool(
-                      '目录',
-                      Icons.menu,
-                      () => Scaffold.of(context).openDrawer(),
-                    ),
-                  ),
-                tool(
-                  '返回',
-                  CupertinoIcons.chevron_left,
-                  busy || history.isEmpty ? null : goBack,
+            if (!desktopLayout && compactSearchOpen && document != null)
+              CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.escape):
+                      closeCompactSearch,
+                },
+                child: Row(
+                  children: [
+                    Expanded(child: searchField()),
+                    const SizedBox(width: 8),
+                    tool('关闭搜索', CupertinoIcons.xmark, closeCompactSearch),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: document == null
-                      ? windowDragArea(
-                          const Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              'HiZip',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
+              )
+            else
+              Row(
+                children: [
+                  windowLeadingControls(),
+                  if (!desktopLayout)
+                    Builder(
+                      builder: (context) => tool('目录', Icons.menu, () {
+                        final scaffold = contentScaffold.currentState;
+                        if (scaffold?.isDrawerOpen == true) {
+                          scaffold?.closeDrawer();
+                        } else {
+                          scaffold?.openDrawer();
+                        }
+                      }),
+                    ),
+                  tool(
+                    '返回',
+                    CupertinoIcons.chevron_left,
+                    busy || history.isEmpty ? null : goBack,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: document == null
+                        ? windowDragArea(
+                            const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'HiZip',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      : pathNavigation(),
-                ),
-                if (desktopLayout && document != null) ...[
-                  tool(
-                    '列表视图',
-                    CupertinoIcons.list_bullet,
-                    () => changeView('list'),
-                    active: !grid && !columns && !gallery,
+                          )
+                        : pathNavigation(),
                   ),
-                  tool(
-                    '图标视图',
-                    CupertinoIcons.square_grid_2x2,
-                    () => changeView('grid'),
-                    active: grid,
-                  ),
-                  tool(
-                    '多栏视图',
-                    CupertinoIcons.rectangle_split_3x1,
-                    () => changeView('columns'),
-                    active: columns,
-                  ),
-                  tool(
-                    '画廊视图',
-                    CupertinoIcons.rectangle_stack,
-                    () => changeView('gallery'),
-                    active: gallery,
-                  ),
-                  tool(
-                    '预览栏',
-                    CupertinoIcons.sidebar_right,
-                    toggleInspector,
-                    active: inspector,
-                  ),
-                  const SizedBox(width: 8),
+                  if (desktopLayout && document != null) ...[
+                    tool(
+                      '列表视图',
+                      CupertinoIcons.list_bullet,
+                      () => changeView('list'),
+                      active: !grid && !columns && !gallery,
+                    ),
+                    tool(
+                      '图标视图',
+                      CupertinoIcons.square_grid_2x2,
+                      () => changeView('grid'),
+                      active: grid,
+                    ),
+                    tool(
+                      '多栏视图',
+                      CupertinoIcons.rectangle_split_3x1,
+                      () => changeView('columns'),
+                      active: columns,
+                    ),
+                    tool(
+                      '画廊视图',
+                      CupertinoIcons.rectangle_stack,
+                      () => changeView('gallery'),
+                      active: gallery,
+                    ),
+                    tool(
+                      '预览栏',
+                      CupertinoIcons.sidebar_right,
+                      toggleInspector,
+                      active: inspector,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  if (document != null)
+                    tool(
+                      '解压',
+                      CupertinoIcons.arrow_down_to_line,
+                      closing ? null : () => extract(),
+                    ),
+                  if (document != null) ...[
+                    const SizedBox(width: 8),
+                    if (desktopLayout)
+                      SizedBox(
+                        key: const ValueKey('top-search-slot'),
+                        width: searchWidth,
+                        child: searchField(),
+                      )
+                    else
+                      tool('搜索', FIcons.search, () {
+                        setState(() => compactSearchOpen = true);
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && compactSearchOpen) {
+                            searchFocus.requestFocus();
+                          }
+                        });
+                      }, active: search.text.isNotEmpty),
+                    const SizedBox(width: 8),
+                  ],
+                  if (!desktop.supportsMenuBar) applicationMenu(),
+                  windowTrailingControls(),
                 ],
-                if (document != null)
-                  tool(
-                    '解压',
-                    CupertinoIcons.arrow_down_to_line,
-                    closing ? null : () => extract(),
-                  ),
-                if (document != null) ...[
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    key: const ValueKey('top-search-slot'),
-                    width: searchWidth,
-                    child: searchField(),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (!desktop.supportsMenuBar) applicationMenu(),
-                windowTrailingControls(),
-              ],
-            ),
+              ),
           ],
         ),
       );
@@ -2845,6 +2967,11 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     active: active,
     icon: Icon(icon, size: 17),
   );
+
+  void closeCompactSearch() {
+    setState(() => compactSearchOpen = false);
+    fileFocus.requestFocus();
+  }
 
   Widget directoryBackground({required Widget child}) => LayoutBuilder(
     builder: (context, constraints) => Stack(

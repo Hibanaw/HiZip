@@ -171,6 +171,38 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('compact sidebar and scrim stay below the toolbar', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    tester.view.physicalSize = const Size(700, 900);
+    await tester.pumpAndSettle();
+    final toolbar = find.byKey(const ValueKey('workspace-top-bar'));
+    final toolbarBounds = tester.getRect(toolbar);
+    final directoryButton = find.descendant(
+      of: toolbar,
+      matching: find.byTooltip('目录'),
+    );
+    await tester.tap(directoryButton);
+    await tester.pumpAndSettle();
+    final drawer = find.byType(Drawer);
+    expect(tester.getRect(drawer).top, toolbarBounds.bottom);
+    final scaffold = tester.state<ScaffoldState>(
+      find.ancestor(of: drawer, matching: find.byType(Scaffold)).first,
+    );
+    expect(scaffold.isDrawerOpen, isTrue);
+    await tester.tap(directoryButton);
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+    await tester.tap(directoryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tree-docs')));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(find.byKey(const ValueKey('file-docs/readme.txt')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('equal row heights, inspector anchors and draggable sidebars', (
     tester,
   ) async {
@@ -394,9 +426,20 @@ void main() {
     final search = find.byKey(const ValueKey('archive-search'));
     void checkBar() {
       expect(find.descendant(of: top, matching: path), findsOneWidget);
-      expect(find.descendant(of: top, matching: search), findsOneWidget);
       expect(tester.getSize(top).height, 49);
-      expect(tester.getCenter(search).dy, closeTo(tester.getCenter(top).dy, 1));
+      if (tester.view.physicalSize.width >= 800) {
+        expect(find.descendant(of: top, matching: search), findsOneWidget);
+        expect(
+          tester.getCenter(search).dy,
+          closeTo(tester.getCenter(top).dy, 1),
+        );
+      } else {
+        expect(search, findsNothing);
+        expect(
+          find.descendant(of: top, matching: find.byTooltip('搜索')),
+          findsOneWidget,
+        );
+      }
       expect(tester.takeException(), isNull);
     }
 
@@ -425,6 +468,45 @@ void main() {
       await tester.pumpAndSettle();
       checkBar();
     }
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('compact search button expands and retains the query on close', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    tester.view.physicalSize = const Size(360, 640);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+    await tester.tap(find.byTooltip('搜索'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<EditableText>(find.byType(EditableText)).focusNode.hasFocus,
+      isTrue,
+    );
+    await tester.enterText(find.byType(EditableText), 'root');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('关闭搜索'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+    expect(find.byTooltip('搜索'), findsOneWidget);
+    await tester.tap(find.byTooltip('搜索'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<EditableText>(find.byType(EditableText)).controller.text,
+      'root',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+    tester.view.physicalSize = const Size(1440, 900);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('archive-search')), findsOneWidget);
+    expect(
+      tester.widget<EditableText>(find.byType(EditableText)).controller.text,
+      'root',
+    );
     await tester.pumpWidget(const SizedBox());
   });
 

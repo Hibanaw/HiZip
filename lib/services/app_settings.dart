@@ -17,6 +17,8 @@ class AppSettings extends ChangeNotifier {
     Future<void> Function(String)? writeLanguage,
     Future<String?> Function()? readTheme,
     Future<void> Function(String)? writeTheme,
+    Future<String?> Function()? readDpiScale,
+    Future<void> Function(String)? writeDpiScale,
     Future<String?> Function()? readHighlight,
     Future<void> Function(String)? writeHighlight,
     Future<String?> Function()? readArchive,
@@ -49,6 +51,13 @@ class AppSettings extends ChangeNotifier {
            writeTheme ??
            ((value) =>
                SharedPreferencesAsync().setString('appearance.theme', value)),
+       _readDpiScale =
+           readDpiScale ??
+           (() => SharedPreferencesAsync().getString('appearance.dpiScale')),
+       _writeDpiScale =
+           writeDpiScale ??
+           ((value) =>
+               SharedPreferencesAsync().setString('appearance.dpiScale', value)),
        _readHighlight =
            readHighlight ??
            (() => SharedPreferencesAsync().getString(
@@ -127,6 +136,9 @@ class AppSettings extends ChangeNotifier {
   final Future<void> Function(int) _write;
   final Future<String?> Function() _readTheme;
   final Future<void> Function(String) _writeTheme;
+  final Future<String?> Function() _readDpiScale;
+  final Future<void> Function(String) _writeDpiScale;
+  double dpiScale = 1;
   final Future<String?> Function() _readHighlight;
   final Future<void> Function(String) _writeHighlight;
   SelectionHighlight selectionHighlight = SelectionHighlight.blue;
@@ -232,6 +244,14 @@ class AppSettings extends ChangeNotifier {
       } catch (_) {
         /* Default appearance when preferences are unavailable. */
       }
+      try {
+        final storedDpi = double.tryParse(await _readDpiScale() ?? '');
+        if (storedDpi != null && storedDpi.isFinite) {
+          dpiScale = storedDpi.clamp(.75, 1.5);
+        }
+      } catch (_) {
+        /* Default DPI when preferences are unavailable. */
+      }
       notifyListeners();
     } catch (_) {
       // A preference read failure must not prevent opening archives.
@@ -265,6 +285,23 @@ class AppSettings extends ChangeNotifier {
       themeMode = mode;
     } catch (_) {
       error = '外观设置保存失败，请重试。';
+    } finally {
+      saving = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setDpiScale(double value) async {
+    final next = value.clamp(.75, 1.5).toDouble();
+    if (saving || (dpiScale - next).abs() < .001) return;
+    saving = true;
+    error = null;
+    notifyListeners();
+    try {
+      await _writeDpiScale(next.toStringAsFixed(2));
+      dpiScale = next;
+    } catch (_) {
+      error = 'DPI 设置保存失败，请重试。';
     } finally {
       saving = false;
       notifyListeners();

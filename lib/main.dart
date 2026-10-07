@@ -6,6 +6,7 @@ import 'ui/app_localizations.dart';
 import 'package:flutter/material.dart';
 
 import 'ui/archive_app.dart';
+import 'ui/dpi_scale.dart';
 import 'ui/window_chrome.dart';
 import 'ui/desktop_widgets.dart';
 import 'services/task_windows.dart';
@@ -46,7 +47,10 @@ class HiZipApp extends StatelessWidget {
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       builder: (context, child) => AppLanguageScope(
         languageCode: Localizations.localeOf(context).languageCode,
-        child: foruiBuilder(context, child),
+        child: DpiScale(
+          scale: AppSettings.instance.dpiScale,
+          child: foruiBuilder(context, child),
+        ),
       ),
       scrollBehavior: const DesktopScrollBehavior(),
       home: windowResizeArea(const ArchiveWorkspace()),

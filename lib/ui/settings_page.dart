@@ -276,6 +276,38 @@ class _SettingsPageState extends State<SettingsPage>
                                     color: context.theme.colors.mutedForeground,
                                   ),
                                 ),
+                                const SizedBox(height: 24),
+                                Row(
+                                  children: [
+                                    const AppText(
+                                      '界面 DPI',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    AppText(
+                                      '：${(settings.dpiScale * 100).round()}%',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                DesktopSlider(
+                                  value: settings.dpiScale,
+                                  min: .75,
+                                  max: 1.5,
+                                  divisions: 15,
+                                  onChanged: settings.saving
+                                      ? null
+                                      : settings.setDpiScale,
+                                ),
+                                const AppText(
+                                  '调整界面文字大小，重启应用后仍会保留。',
+                                  style: TextStyle(fontSize: 12, height: 1.6),
+                                ),
                               ],
                               if (section == 'archive') ...[
                                 const AppText(

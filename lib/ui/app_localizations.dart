@@ -271,6 +271,10 @@ const _english = <String, String>{
   '最近打开': 'Open Recent',
   '暂无最近打开的文件': 'No Recent Files',
   '清除菜单': 'Clear Menu',
+  '界面 DPI': 'Interface DPI',
+  '关闭搜索': 'Close Search',
+  '调整界面文字大小，重启应用后仍会保留。':
+      'Adjust interface text size. The setting persists after restart.',
   '信息': 'Information',
   '路径': 'Path',
   '项目': 'Items',

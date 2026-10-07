@@ -2,6 +2,7 @@ import 'app_localizations.dart';
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
@@ -40,6 +41,11 @@ class FileContextMenu extends StatefulWidget {
     this.applications,
     this.onOpenWith,
     this.onChooseApplication,
+    this.onTouchDragStart,
+    this.onTouchDragUpdate,
+    this.onTouchDragEnd,
+    this.onTouchDragCancel,
+    this.touchDragLabel,
     this.applicationOnly = false,
     this.primaryClick = false,
     this.openUpwards = false,
@@ -63,6 +69,10 @@ class FileContextMenu extends StatefulWidget {
       onChooseApplication;
   final Future<List<FileApplication>> Function()? applications;
   final void Function(FileApplication)? onOpenWith;
+  final VoidCallback? onTouchDragStart;
+  final ValueChanged<Offset>? onTouchDragUpdate, onTouchDragEnd;
+  final VoidCallback? onTouchDragCancel;
+  final String? touchDragLabel;
   @override
   State<FileContextMenu> createState() => _FileContextMenuState();
 }
@@ -93,6 +103,10 @@ class _FileContextMenuState extends State<FileContextMenu>
   int request = 0;
   bool menuShown = false;
   FocusNode? previousFocus;
+  Timer? touchLongPressTimer, touchDragTimer;
+  Offset touchPosition = Offset.zero, touchDownPosition = Offset.zero;
+  bool touchHeld = false, touchLongPressed = false, touchDragging = false;
+  OverlayEntry? touchDragOverlay;
   @override
   void initState() {
     super.initState();
@@ -103,12 +117,125 @@ class _FileContextMenuState extends State<FileContextMenu>
   void didChangeMetrics() => close();
   @override
   void dispose() {
+    cancelTouch();
     ++request;
     if (opened == this) opened = null;
     WidgetsBinding.instance.removeObserver(this);
     controller.dispose();
     menuFocus.dispose();
     super.dispose();
+  }
+
+  void cancelTouch() {
+    if (touchDragging) widget.onTouchDragCancel?.call();
+    touchLongPressTimer?.cancel();
+    touchDragTimer?.cancel();
+    touchLongPressTimer = null;
+    touchDragTimer = null;
+    touchHeld = false;
+    touchLongPressed = false;
+    touchDragging = false;
+    touchDragOverlay?.remove();
+    touchDragOverlay = null;
+  }
+
+  void touchDown(PointerDownEvent event) {
+    if (!widget.enabled ||
+        widget.primaryClick ||
+        event.kind != PointerDeviceKind.touch) {
+      return;
+    }
+    cancelTouch();
+    touchHeld = true;
+    touchPosition = event.position;
+    touchDownPosition = event.position;
+    touchLongPressTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted || !touchHeld) return;
+      touchLongPressed = true;
+    });
+    if (widget.onTouchDragStart != null) {
+      touchDragTimer = Timer(const Duration(milliseconds: 400), () {
+        if (!mounted || !touchHeld) return;
+        if (!touchLongPressed) {
+          touchDragTimer = Timer(const Duration(milliseconds: 100), () {
+            if (mounted && touchHeld && touchLongPressed) startTouchDrag();
+          });
+          return;
+        }
+        startTouchDrag();
+      });
+    }
+  }
+
+  void startTouchDrag() {
+    if (!mounted || !touchHeld || !touchLongPressed) return;
+    touchDragTimer = null;
+    touchDragging = true;
+    showTouchDragFeedback();
+    widget.onTouchDragStart?.call();
+    widget.onTouchDragUpdate?.call(touchPosition);
+  }
+
+  void touchMove(PointerMoveEvent event) {
+    if (!touchHeld || event.kind != PointerDeviceKind.touch) return;
+    if (!touchLongPressed &&
+        (event.position - touchDownPosition).distance > kTouchSlop) {
+      cancelTouch();
+      return;
+    }
+    touchPosition = event.position;
+    if (touchDragging) widget.onTouchDragUpdate?.call(touchPosition);
+    if (touchDragOverlay != null) touchDragOverlay!.markNeedsBuild();
+  }
+
+  void touchUp(PointerUpEvent event) {
+    if (!touchHeld || event.kind != PointerDeviceKind.touch) return;
+    touchPosition = event.position;
+    final showMenu = touchLongPressed && !touchDragging;
+    if (touchDragging) widget.onTouchDragEnd?.call(touchPosition);
+    touchDragging = false;
+    cancelTouch();
+    if (showMenu) open(touchPosition);
+  }
+
+  void touchCancel(PointerCancelEvent event) {
+    if (event.kind == PointerDeviceKind.touch) cancelTouch();
+  }
+
+  void showTouchDragFeedback() {
+    final overlay = Overlay.of(context, rootOverlay: true);
+    touchDragOverlay = OverlayEntry(
+      builder: (_) {
+        final box = overlay.context.findRenderObject()! as RenderBox;
+        final position = box.globalToLocal(touchPosition);
+        return Positioned(
+          left: position.dx + 12,
+          top: position.dy + 12,
+          child: IgnorePointer(
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(8),
+              color: Theme.of(context).colorScheme.surface,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.open_with, size: 16),
+                    const SizedBox(width: 6),
+                    Text(widget.touchDragLabel ?? '拖动'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(touchDragOverlay!);
   }
 
   void close() {
@@ -190,8 +317,7 @@ class _FileContextMenuState extends State<FileContextMenu>
     ),
     FItemGroup(children: [item('其他…', widget.onChooseApplication)]),
   ];
-  FItemMixin actionItem(DesktopMenuAction action) =>
-      action.children == null
+  FItemMixin actionItem(DesktopMenuAction action) => action.children == null
       ? item(
           action.title,
           action.onPressed,
@@ -316,16 +442,23 @@ class _FileContextMenuState extends State<FileContextMenu>
                   }
                 }
               : null,
-          child:
-              widget.triggerBuilder?.call(context, menuShown, () {
-                if (opened == this) {
-                  close();
-                } else {
-                  open(Offset.zero);
-                }
-              }) ??
-              widget.childBuilder?.call(context, menuShown, widget.child) ??
-              widget.child,
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: touchDown,
+            onPointerMove: touchMove,
+            onPointerUp: touchUp,
+            onPointerCancel: touchCancel,
+            child:
+                widget.triggerBuilder?.call(context, menuShown, () {
+                  if (opened == this) {
+                    close();
+                  } else {
+                    open(Offset.zero);
+                  }
+                }) ??
+                widget.childBuilder?.call(context, menuShown, widget.child) ??
+                widget.child,
+          ),
         ),
       ),
     ),

@@ -1,5 +1,6 @@
 import 'package:hizip/ui/desktop_widgets.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/models/archive_entry.dart';
@@ -8,6 +9,7 @@ import 'package:hizip/services/desktop_integration.dart';
 import 'package:hizip/services/file_transfer_clipboard.dart';
 import 'package:hizip/ui/archive_app.dart';
 import 'package:hizip/ui/file_item_surface.dart';
+import 'package:hizip/ui/file_context_menu.dart';
 
 class TransferService extends ArchiveService {
   List<ArchiveEntry> exported = [];
@@ -140,4 +142,77 @@ void main() {
       expect(opens, 0);
     },
   );
+
+  testWidgets('touch long press opens context menu on release', (tester) async {
+    var opened = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FileContextMenu(
+          onOpen: () => opened++,
+          child: const SizedBox(width: 120, height: 40),
+        ),
+      ),
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(FileContextMenu)),
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(const Duration(milliseconds: 550));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(find.text('打开'), findsOneWidget);
+    expect(opened, 0);
+  });
+
+  testWidgets('touch hold past drag threshold invokes drag callback', (
+    tester,
+  ) async {
+    var starts = 0, updates = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FileContextMenu(
+          onTouchDragStart: () => starts++,
+          onTouchDragUpdate: (_) => updates++,
+          child: const SizedBox(width: 120, height: 40),
+        ),
+      ),
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(FileContextMenu)),
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(const Duration(milliseconds: 950));
+    await gesture.moveBy(const Offset(20, 0));
+    await gesture.up();
+    expect(starts, 1);
+    expect(updates, greaterThan(0));
+  });
+
+  testWidgets('mouse drag still passes through the touch menu layer', (
+    tester,
+  ) async {
+    var drags = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: foruiBuilder,
+        home: FileContextMenu(
+          child: FileItemSurface(
+            name: 'file',
+            selected: false,
+            onSelect: () {},
+            onActivate: () {},
+            onDragStart: () => drags++,
+            child: const SizedBox(width: 120, height: 40),
+          ),
+        ),
+      ),
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(FileItemSurface)),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(60, 0));
+    await gesture.up();
+    expect(drags, 1);
+  });
 }
