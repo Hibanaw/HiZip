@@ -4,7 +4,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:forui/forui.dart';
-import 'package:file_selector/file_selector.dart';
+import '../services/platform_files.dart';
+import '../services/harmony_bridge.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,6 +39,99 @@ import '../services/file_transfer_clipboard.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 const muted = Color(0xff8b909b), blue = Color(0xff3478f6);
+
+class FlatArchiveIcon extends StatelessWidget {
+  const FlatArchiveIcon({
+    required this.directory,
+    required this.image,
+    required this.width,
+    required this.height,
+  });
+
+  final bool directory;
+  final bool image;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    size: Size(width, height),
+    painter: _FlatArchiveIconPainter(directory: directory, image: image),
+  );
+}
+
+class _FlatArchiveIconPainter extends CustomPainter {
+  const _FlatArchiveIconPainter({required this.directory, required this.image});
+
+  final bool directory;
+  final bool image;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = size.shortestSide / 48;
+    canvas.scale(scale, scale);
+    final paint = Paint()..style = PaintingStyle.fill;
+    if (directory) {
+      paint.color = const Color(0xffffca28);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          const Rect.fromLTWH(4, 12, 40, 28),
+          const Radius.circular(5),
+        ),
+        paint,
+      );
+      paint.color = const Color(0xffffa000);
+      final tab = Path()
+        ..moveTo(4, 12)
+        ..lineTo(21, 12)
+        ..lineTo(25, 16)
+        ..lineTo(44, 16)
+        ..lineTo(44, 21)
+        ..lineTo(4, 21)
+        ..close();
+      canvas.drawPath(tab, paint);
+    } else {
+      paint.color = image ? const Color(0xff81d4fa) : const Color(0xff90caf9);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          const Rect.fromLTWH(10, 4, 27, 40),
+          const Radius.circular(4),
+        ),
+        paint,
+      );
+      paint.color = image ? const Color(0xff26a69a) : const Color(0xff1976d2);
+      if (image) {
+        canvas.drawCircle(
+          const Offset(30, 13),
+          4,
+          Paint()..color = const Color(0xfffff59d),
+        );
+        final photo = Path()
+          ..moveTo(12, 39)
+          ..lineTo(21, 23)
+          ..lineTo(27, 31)
+          ..lineTo(31, 25)
+          ..lineTo(36, 39)
+          ..close();
+        canvas.drawPath(photo, paint);
+      } else {
+        for (final y in [22.0, 29.0, 36.0]) {
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(16, y, y == 36 ? 15 : 20, 3),
+              const Radius.circular(1.5),
+            ),
+            paint,
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FlatArchiveIconPainter oldDelegate) =>
+      oldDelegate.directory != directory || oldDelegate.image != image;
+}
 
 class _ArchiveTab {
   _ArchiveTab(this.document);
@@ -782,6 +876,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     await run(
       () async {
         await service.create(target.path, files.map((f) => f.path).toList());
+        if (HarmonyBridge.supported) {
+          await HarmonyBridge.finishSave(target.path);
+        }
         message('压缩包已创建');
       },
       title: '正在创建压缩包',
@@ -944,7 +1041,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             );
           },
         );
-        message('解压完成：$output');
+        final destination = HarmonyBridge.supported
+            ? await HarmonyBridge.finishDirectory(target, output)
+            : output;
+        message('解压完成：$destination');
       },
       title: '正在解压',
       archivePath: doc.path,
@@ -1135,7 +1235,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   void warmExport() {
-    if (!widget.enableNativeTransfers ||
+    if ((!widget.enableNativeTransfers || HarmonyBridge.supported) ||
         document == null ||
         selection.isEmpty) {
       return;
@@ -1291,6 +1391,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       await run(
         () async {
           await service.create(target.path, paths);
+          if (HarmonyBridge.supported) {
+            await HarmonyBridge.finishSave(target.path);
+          }
           message('压缩包已创建');
         },
         title: '正在创建压缩包',
@@ -1525,7 +1628,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       onDrop: () => unawaited(performTouchDrop(destination)),
       child: child,
     );
-    return !widget.enableNativeTransfers
+    return (!widget.enableNativeTransfers || HarmonyBridge.supported)
         ? touchTarget
         : FileDropTarget(
             operation: (event) => dropOperation(event, destination),
@@ -1663,7 +1766,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget transferable(ArchiveEntry entry, Widget child) {
-    if (!widget.enableNativeTransfers) {
+    if (!widget.enableNativeTransfers || HarmonyBridge.supported) {
       return entry.directory ? dropTarget(entry.normalized, child) : child;
     }
     if (desktop.supportsQuickLook) {
@@ -2921,6 +3024,24 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
                     const SizedBox(width: 8),
                   ],
+                  if (HarmonyBridge.supported && document != null)
+                    tool(
+                      '保存副本',
+                      Icons.save_alt,
+                      busy
+                          ? null
+                          : () => run(
+                              () async {
+                                if (await HarmonyBridge.exportFile(
+                                  document!.path,
+                                )) {
+                                  message('压缩包副本已保存');
+                                }
+                              },
+                              title: '正在保存压缩包',
+                              reportSuccess: false,
+                            ),
+                    ),
                   if (document != null)
                     tool(
                       '解压',
@@ -3259,13 +3380,20 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         pixelSize: (size * MediaQuery.devicePixelRatioOf(context)).ceil(),
       ),
       builder: (_, snapshot) => snapshot.data == null
-          ? Icon(
-              entryIcon(e),
-              size: size,
-              color: e.directory
-                  ? const Color(0xff6d9cbe)
-                  : const Color(0xff858b92),
-            )
+          ? HarmonyBridge.supported
+                ? FlatArchiveIcon(
+                    directory: e.directory,
+                    image: e.isImage,
+                    width: size,
+                    height: size,
+                  )
+                : Icon(
+                    entryIcon(e),
+                    size: size,
+                    color: e.directory
+                        ? const Color(0xff6d9cbe)
+                        : const Color(0xff858b92),
+                  )
           : Image.memory(
               snapshot.data!,
               width: size,
