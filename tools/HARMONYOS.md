@@ -58,7 +58,8 @@ hdc -t 192.168.10.184:42447 shell aa start -b dev.hizip.hizip -a EntryAbility
 - 压缩包修改发生在沙箱副本中；使用工具栏“保存副本”导出。当前不会自动覆盖最初选择的公开文件。
 - 新建压缩包和解压操作完成后，将结果复制到授权的公开位置。
 - 应用设置通过 HarmonyOS Preferences 保存，缓存通过原生接口获取。
-- 外部打开当前提供文件导出，不支持外部编辑器修改后自动写回。
+- 支持窗口控制的设备隐藏系统标题栏，保留系统最小化、最大化/还原与关闭按钮；通过 49vp 装饰高度使按钮与 Flutter 工具栏居中对齐，并按实际按钮矩形预留空间。工具栏提供拖动、双击最大化/还原，系统关闭按钮等待后台任务与缓存清理完成；隐藏标题栏失败时保留系统装饰。
+- 压缩包内文件“打开”调用系统默认应用；未配置默认项时由系统选择可用应用。外部编辑器就地修改缓存文件后，可检测并写回可写压缩包的沙箱副本；“保存副本”用于导出到公开位置。
 - 桌面文件剪贴板、跨应用拖拽、Quick Look 与 macOS 文件关联尚未移植。
 
 当前鸿蒙原生构建包含 zlib，已验证 ZIP 的创建、读取、预览、解压与更新。bzip2、lzma 和 zstd 的交叉编译依赖尚未补齐，因此不能保证所有 7z、xz 等格式的编解码能力。公开目录导出与系统选择器的完整交互流程仍需进一步真机验收。
@@ -76,3 +77,17 @@ tools/flutter-ohos build hap --debug -t integration_test/ohos_native_smoke.dart
 ```
 
 真机自检只处理自建的临时文件，结束后启动正常应用。完成自检后重新构建并安装默认 Release 入口。
+
+`nativeapi` 的窗口增量实现提供 `NativeHostWindow.changes`、`moveTo`、`resize` 与最大尺寸约束；文件接口新增 `openFile`、`openDirectory` 和支持目录，选择器支持扩展名过滤。接口约定与示例见 [插件说明](../packages/nativeapi/README.md)。本轮插件 20 项测试与新增代码静态分析通过，签名 Release 包构建成功。
+
+自检新增支持目录、窗口事件订阅、窗口参数、导出沙箱路径、路径穿越和文件后缀校验。若设备禁止创建用于检查的符号链接，该检查记录在报告的 `skipped` 数组中。文档选择器、目录复制和改变窗口位置/尺寸的交互仍需单独验收。
+
+本轮 API 24 真机自检 15 项通过，符号链接检查因设备返回 `Permission denied` 跳过；原生错误在选择器弹出前正确返回。
+
+默认应用打开的专项自检可按以下方式构建；安装启动后会创建测试 ZIP 并通过 `ArchiveService.open` 打开其中的中文文本文件。HiLog 中的 `HIZIP_DEFAULT_OPEN` 记录路径校验和系统启动结果，实际文档显示需在设备上确认。测试保留缓存文件供外部应用读取，完成后重新安装正常 Release 入口。
+
+```sh
+tools/flutter-ohos build hap --release --no-pub \
+  -t integration_test/ohos_native_smoke.dart \
+  --dart-define=HIZIP_SMOKE_OPEN_DEFAULT=true
+```
