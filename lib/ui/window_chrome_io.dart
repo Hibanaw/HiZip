@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:nativeapi_flutter/nativeapi_flutter.dart' as native;
 
 import 'desktop_widgets.dart';
+import 'window_close_button.dart';
 
 bool _enabled = false, _secondary = false;
 native.Window? _window;
@@ -82,9 +83,10 @@ class _WindowControlsState extends State<_WindowControls> {
           }
         }),
       ),
-      DesktopIconButton(
-        tooltip: '关闭',
-        icon: const Icon(Icons.close, size: 17),
+      WindowCloseButton(
+        platform: Platform.isLinux
+            ? TargetPlatform.linux
+            : TargetPlatform.windows,
         onPressed: () {
           if (_secondary) {
             (_closeSecondary ?? widget.window.hide)();

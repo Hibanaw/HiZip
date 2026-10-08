@@ -21,6 +21,7 @@ dependencies:
   super_drag_and_drop: ^0.9.1
   super_clipboard: ^0.9.1
   forui: ^0.21.3
+  libadwaita: ^2.0.2
   nativeapi_flutter: ^0.4.1
   desktop_multi_window: ^0.3.1
   shared_preferences: ^2.5.6
