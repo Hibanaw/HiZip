@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ffi' as ffi;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:nativeapi_flutter/nativeapi_flutter.dart' as native;
@@ -11,6 +12,11 @@ bool _enabled = false, _secondary = false;
 native.Window? _window;
 VoidCallback? _closeSecondary;
 void setTaskWindowCloseAction(VoidCallback action) => _closeSecondary = action;
+
+// GTK3's Wayland backend has no visible-region API (only an input region),
+// so this stays false there; X11 and XWayland sessions report true.
+bool _canRoundLinuxCorners = false;
+const double _linuxCornerRadius = 10;
 
 /// Resolve and configure the existing Flutter window rather than creating one.
 Future<void> initializeWindowChrome({int? nativePointer}) async {
@@ -30,6 +36,86 @@ Future<void> initializeWindowChrome({int? nativePointer}) async {
   }
   _window!.isWindowControlButtonsVisible = _secondary || Platform.isMacOS;
   _enabled = true;
+  if (Platform.isLinux && !_secondary) {
+    _canRoundLinuxCorners = native.Window.isShapeSupported();
+    if (_canRoundLinuxCorners) {
+      _applyLinuxWindowShape();
+      final windowId = _window!.id;
+      native.WindowManager.instance.addListener((event) {
+        if (event.windowId != windowId) return;
+        switch (event) {
+          case native.WindowResizedEvent():
+          case native.WindowMaximizedEvent():
+          case native.WindowRestoredEvent():
+          case native.WindowEnteredFullScreenEvent():
+          case native.WindowExitedFullScreenEvent():
+            _applyLinuxWindowShape();
+          default:
+            break;
+        }
+      });
+    }
+  }
+}
+
+/// Rounds the main window's visible (and input) region on Linux, skipping
+/// the corners while maximized or full screen like other desktop windows do.
+void _applyLinuxWindowShape() {
+  final window = _window;
+  if (window == null || !_canRoundLinuxCorners) return;
+  if (window.isMaximized || window.isFullScreen) {
+    window.setShape(null);
+    return;
+  }
+  final size = window.contentSize;
+  if (size.width <= _linuxCornerRadius * 2 ||
+      size.height <= _linuxCornerRadius * 2) {
+    return;
+  }
+  final shape = native.WindowShape.create();
+  if (shape == null) return;
+  try {
+    for (final point in _roundedRectanglePoints(
+      size.width,
+      size.height,
+      _linuxCornerRadius,
+    )) {
+      shape.addPoint(point);
+    }
+    window.setShape(shape);
+  } finally {
+    shape.dispose();
+  }
+}
+
+/// Vertices of a rectangle with its corners cut to quarter-circle arcs,
+/// approximated with short segments (`WindowShape` only takes line segments).
+List<native.Point> _roundedRectanglePoints(
+  double width,
+  double height,
+  double radius,
+) {
+  const segmentsPerCorner = 8;
+  final points = <native.Point>[];
+  void arc(double centerX, double centerY, double startDeg, double endDeg) {
+    for (var i = 0; i <= segmentsPerCorner; i++) {
+      final t =
+          (startDeg + (endDeg - startDeg) * i / segmentsPerCorner) *
+          (3.14159265358979323846 / 180);
+      points.add(
+        native.Point(
+          x: centerX + radius * math.cos(t),
+          y: centerY + radius * math.sin(t),
+        ),
+      );
+    }
+  }
+
+  arc(width - radius, radius, -90, 0);
+  arc(width - radius, height - radius, 0, 90);
+  arc(radius, height - radius, 90, 180);
+  arc(radius, radius, 180, 270);
+  return points;
 }
 
 Widget windowDragArea(Widget child) =>
