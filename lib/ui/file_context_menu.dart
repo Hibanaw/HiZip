@@ -36,6 +36,8 @@ class FileContextMenu extends StatefulWidget {
     this.onCopy,
     this.onPaste,
     this.onExtract,
+    this.onExtractAll,
+    this.onExtractAllNamed,
     this.onDelete,
     this.onNewFolder,
     this.onNewDocument,
@@ -65,6 +67,8 @@ class FileContextMenu extends StatefulWidget {
       onCopy,
       onPaste,
       onExtract,
+      onExtractAll,
+      onExtractAllNamed,
       onDelete,
       onNewFolder,
       onNewDocument,
@@ -397,6 +401,14 @@ class _FileContextMenuState extends State<FileContextMenu>
       ),
       if (widget.onExtract != null)
         FItemGroup(children: [item('解压所选', widget.onExtract)]),
+      if (widget.onExtractAll != null || widget.onExtractAllNamed != null)
+        FItemGroup(
+          children: [
+            if (widget.onExtractAll != null) item('解压全部…', widget.onExtractAll),
+            if (widget.onExtractAllNamed != null)
+              item('解压全部到同名文件夹…', widget.onExtractAllNamed),
+          ],
+        ),
       if (widget.onNewFolder != null || widget.onNewDocument != null)
         FItemGroup(
           children: [

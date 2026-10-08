@@ -31,6 +31,7 @@ import '../services/app_settings.dart';
 import '../services/task_windows.dart';
 import 'window_chrome.dart';
 import 'task_feedback_controller.dart';
+import 'breathing_status_bar.dart';
 import '../services/archive_task_queue.dart';
 import '../services/queued_archive_service.dart';
 import '../models/task_feedback.dart';
@@ -171,6 +172,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   ArchiveEntry? selected;
   String folder = '', status = '未打开压缩包';
   bool statusError = false;
+  String? acknowledgedAttention;
   Timer? statusResetTimer;
   bool busy = false,
       grid = false,
@@ -452,6 +454,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     }
     if (command == 'closeArchive') closeTab(document?.path);
     if (command == 'extract') extract();
+    if (command == 'extractNamed') extract(namedFolder: true);
     if (command == 'newFolder') newEntry(directory: true);
     if (command == 'newDocument') newEntry();
     if (command == 'delete') deleteSelection();
@@ -1033,15 +1036,22 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Future<void> extract({bool onlySelected = false}) async {
+  Future<void> extract({
+    bool onlySelected = false,
+    bool namedFolder = false,
+  }) async {
     final doc = document;
     if (doc == null || closing) return;
-    final extractionDoc = onlySelected && selection.length > 1
-        ? selectedDocument()
-        : doc;
-    final extractionEntry = onlySelected && selection.length <= 1
-        ? selected
-        : null;
+    final extractionDoc = doc;
+    // A selection extracts its own roots directly into the destination. So
+    // does the whole archive, unless the caller asked for it to land inside
+    // a folder named after the archive (roots: null lets the service pick
+    // and auto-dedupe that name) — the two never combine in this app's UI.
+    final extractionRoots = onlySelected && selection.isNotEmpty
+        ? topLevelEntries(selection)
+        : namedFolder
+        ? null
+        : topLevelEntries(doc.entries);
     final target = await getDirectoryPath(
       confirmButtonText: translateAppText(
         '解压到这里',
@@ -1049,13 +1059,70 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       ),
     );
     if (target == null) return;
+    var linkPolicy = LinkPolicy.keepAll;
+    final unsafeLinks = unsafeLinksFor(extractionDoc, extractionRoots);
+    if (unsafeLinks.isNotEmpty) {
+      final example = unsafeLinks.first;
+      final situation = '发现 ${unsafeLinks.length} 个指向绝对路径或解压目录之外的符号链接';
+      setState(() {
+        status = situation;
+        statusError = false;
+      });
+      final choice = await feedback.ask(
+        TaskFeedback(
+          title: '压缩包含有可能不安全的符号链接',
+          detail:
+              '$situation，例如 ${example.path} → ${example.linkTarget}。\n\n保留后，解压出的链接会指向压缩包之外的位置。',
+          actions: const {'keep': '保留链接', 'skip': '跳过这些链接', 'cancel': '取消'},
+        ),
+      );
+      if (!mounted) return;
+      if (choice == null || choice == 'cancel') {
+        setState(() => status = defaultStatus());
+        return;
+      }
+      if (choice == 'skip') linkPolicy = LinkPolicy.skipUnsafe;
+      setState(() => status = defaultStatus());
+    }
+    var caseConflictPolicy = CaseConflictPolicy.rename;
+    final clashes = await service.caseConflicts(
+      extractionDoc,
+      target,
+      roots: extractionRoots,
+    );
+    if (clashes.isNotEmpty) {
+      final situation = '有 ${clashes.length} 个文件仅大小写不同，目标磁盘不区分大小写';
+      setState(() {
+        status = situation;
+        statusError = false;
+      });
+      final choice = await feedback.ask(
+        TaskFeedback(
+          title: '文件名仅大小写不同',
+          detail:
+              '$situation，例如 ${clashes.first.path}。\n\n自动重命名会保留两个文件（后者加上“ (2)”），跳过则只保留第一个。',
+          actions: const {'rename': '自动重命名', 'skip': '跳过后者', 'cancel': '取消'},
+        ),
+      );
+      if (!mounted) return;
+      if (choice == null || choice == 'cancel') {
+        setState(() => status = defaultStatus());
+        return;
+      }
+      if (choice == 'skip') caseConflictPolicy = CaseConflictPolicy.skip;
+      setState(() => status = defaultStatus());
+    }
+    final notices = <String>[];
     await run(
       () async {
         if (tabFor(doc.path) == null) return;
         final output = await service.extract(
           extractionDoc,
           target,
-          entry: extractionEntry,
+          roots: extractionRoots,
+          linkPolicy: linkPolicy,
+          caseConflictPolicy: caseConflictPolicy,
+          notice: notices.add,
           progress: (done, total) {
             if (mounted) {
               setState(() {
@@ -1075,12 +1142,50 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             );
           },
         );
-        message('解压完成：$output');
+        if (notices.isEmpty) {
+          message('解压完成：$output');
+        } else {
+          // Kept on screen and pulsing until the user acknowledges it.
+          message(
+            '解压完成，但${notices.join('；')}：$output',
+            error: true,
+            showFeedback: false,
+          );
+        }
       },
       title: '正在解压',
       archivePath: doc.path,
       showProgress: true,
     );
+  }
+
+  List<ArchiveEntry> unsafeLinksFor(
+    ArchiveDocument doc,
+    List<ArchiveEntry>? roots,
+  ) => doc.entries
+      .where(
+        (e) =>
+            e.hasUnsafeLink &&
+            (roots == null ||
+                roots.any(
+                  (r) =>
+                      e.path == r.path ||
+                      (r.directory &&
+                          e.normalized.startsWith('${r.normalized}/')),
+                )),
+      )
+      .toList();
+
+  void acknowledgeStatus(String key) {
+    statusResetTimer?.cancel();
+    if (feedback.data?.error == true) feedback.action('dismiss');
+    setState(() {
+      if (statusError) {
+        statusError = false;
+        status = defaultStatus();
+      }
+      acknowledgedAttention = key;
+    });
   }
 
   Future<void> checkChanges() async {
@@ -2297,6 +2402,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                                               ? null
                                                               : () =>
                                                                     newEntry(),
+                                                          onExtractAll: busy
+                                                              ? null
+                                                              : () => extract(),
+                                                          onExtractAllNamed:
+                                                              busy
+                                                              ? null
+                                                              : () => extract(
+                                                                  namedFolder:
+                                                                      true,
+                                                                ),
                                                           onPaste:
                                                               busy ||
                                                                   !document!
@@ -2461,6 +2576,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         ),
                         Expanded(
                           child: FileContextMenu(
+                            onExtractAll: busy ? null : () => extract(),
+                            onExtractAllNamed: busy
+                                ? null
+                                : () => extract(namedFolder: true),
                             onPaste: busy || !document!.writable
                                 ? null
                                 : () => pasteInto(parent),
@@ -3027,7 +3146,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             for (final format in writableArchiveFormats.entries)
               action(format.value, 'create:${format.key}', available),
           ]),
-          action('解压…', 'extract', hasDocument),
+          action('解压全部…', 'extract', hasDocument),
+          action('解压全部到同名文件夹…', 'extractNamed', hasDocument),
           action('新建文件夹…', 'newFolder', writable),
           action('新建空白文档…', 'newDocument', writable),
           action('删除…', 'delete', writable && selectedPaths.isNotEmpty),
@@ -3970,17 +4090,29 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             onPressed: busy || entries.isEmpty ? null : openSelection,
             child: const AppText('打开'),
           );
+    final overview = entries.isEmpty;
     final extractButton = DesktopButton(
       key: const ValueKey('selection-extract'),
-      onPressed: busy ? null : () => extract(onlySelected: entries.isNotEmpty),
-      child: const AppText('解压'),
+      onPressed: busy ? null : () => extract(onlySelected: !overview),
+      child: AppText(overview ? '解压全部' : '解压'),
     );
+    final extractNamedButton = overview
+        ? DesktopButton(
+            key: const ValueKey('selection-extract-named'),
+            onPressed: busy ? null : () => extract(namedFolder: true),
+            child: const AppText('解压全部到同名文件夹'),
+          )
+        : null;
     if (compact) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (canOpen) ...[open, const SizedBox(width: 8)],
           extractButton,
+          if (extractNamedButton != null) ...[
+            const SizedBox(width: 8),
+            extractNamedButton,
+          ],
         ],
       );
     }
@@ -3989,6 +4121,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       children: [
         if (canOpen) ...[open, const SizedBox(height: 8)],
         extractButton,
+        if (extractNamedButton != null) ...[
+          const SizedBox(height: 8),
+          extractNamedButton,
+        ],
       ],
     );
   }
@@ -4553,6 +4689,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               ? appText(context, data.title)
               : appText(context, data.detail))
         : appText(context, status);
+    final needsAttention = confirmation || data?.error == true || statusError;
+    final attentionKey = '$confirmation|${data?.error}|$statusError|$text';
+    final attention =
+        needsAttention &&
+        active == null &&
+        acknowledgedAttention != attentionKey;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -4665,10 +4807,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
             ),
           ),
-        Container(
+        BreathingStatusBar(
           key: const ValueKey('workspace-status-bar'),
           height: 30,
           padding: const EdgeInsets.symmetric(horizontal: 12),
+          active: attention,
+          tint: confirmation
+              ? Theme.of(context).colorScheme.primary
+              : const Color(0xffb44444),
+          onTap: () => acknowledgeStatus(attentionKey),
           decoration: BoxDecoration(
             color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
             border: Border(
