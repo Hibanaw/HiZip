@@ -4,7 +4,7 @@ import 'package:path/path.dart' as p;
 
 import '../models/archive_formats.dart';
 
-const _desktopFileName = 'dev.hizip.hizip.desktop';
+const _desktopFileName = 'com.hibanaw.hizip.desktop';
 
 String _desktopExec(String executable) {
   final escaped = executable
@@ -25,7 +25,7 @@ TryExec=${Platform.resolvedExecutable}
 Terminal=false
 Categories=Utility;Archiving;
 MimeType=${readableArchiveMimeTypes.map((type) => '$type;').join()}
-StartupWMClass=dev.hizip.hizip
+StartupWMClass=com.hibanaw.hizip
 ''';
 
 Future<File> _installDesktopEntry() async {
@@ -81,9 +81,7 @@ Future<List<String>> initialArchivePaths() async {
             argument != '--' &&
             !argument.startsWith('-') &&
             File(argument).existsSync() &&
-            readableArchiveExtensions.any(
-              (extension) => argument.toLowerCase().endsWith('.$extension'),
-            ),
+            isReadableArchivePath(argument),
       )
       .toList();
 }

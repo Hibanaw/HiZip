@@ -32,6 +32,10 @@ class DesktopIntegration {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsQuickLook =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+  bool get supportsFileIntegration =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux);
   bool get supportsDefaultApplication =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
@@ -48,7 +52,7 @@ class DesktopIntegration {
   );
 
   Future<List<FileApplication>> applicationsForFile(String name) {
-    if (!supportsQuickLook) return Future.value([]);
+    if (!supportsFileIntegration) return Future.value([]);
     return _handlers.putIfAbsent(p.extension(name).toLowerCase(), () async {
       try {
         final apps = await channel.invokeListMethod<Object?>(
@@ -66,10 +70,11 @@ class DesktopIntegration {
     });
   }
 
-  Future<FileApplication?> chooseApplication() async {
-    if (!supportsQuickLook) return null;
+  Future<FileApplication?> chooseApplication([String? name]) async {
+    if (!supportsFileIntegration) return null;
     final app = await channel.invokeMapMethod<Object?, Object?>(
       'chooseApplication',
+      name == null ? null : {'path': name},
     );
     return app == null ? null : _application(app);
   }
@@ -219,7 +224,7 @@ class DesktopIntegration {
     bool directory = false,
     int pixelSize = 128,
   }) {
-    if (!supportsQuickLook) return Future.value();
+    if (!supportsFileIntegration) return Future.value();
     // Reuse a few resolutions while resizing instead of caching every pixel size.
     var resolution = 32;
     final requestedSize = pixelSize.clamp(32, 1024);
@@ -244,7 +249,7 @@ class DesktopIntegration {
   }
 
   Future<DefaultApplication?> defaultApplication(String name) {
-    if (!supportsQuickLook) return Future.value();
+    if (!supportsFileIntegration) return Future.value();
     return _applications.putIfAbsent(p.extension(name).toLowerCase(), () async {
       try {
         final info = await channel.invokeMapMethod<String, dynamic>(

@@ -1,4 +1,4 @@
-package dev.hizip.hizip
+package com.hibanaw.hizip
 
 import io.flutter.embedding.android.FlutterActivity
 

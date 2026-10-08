@@ -1,7 +1,10 @@
 #include "my_application.h"
 #include <cstdint>
+#include <cstring>
+#include <string>
 
 #include <flutter_linux/flutter_linux.h>
+#include <gio/gio.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -16,9 +19,139 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+static std::string argument_string(FlMethodCall* call, const gchar* key) {
+  FlValue* args = fl_method_call_get_args(call);
+  FlValue* value = fl_value_lookup_string(args, key);
+  return value && fl_value_get_type(value) == FL_VALUE_TYPE_STRING
+      ? fl_value_get_string(value)
+      : std::string();
+}
+
+static FlValue* icon_png(GIcon* icon, gint size) {
+  if (!icon) return nullptr;
+  const gchar* const* names = G_IS_THEMED_ICON(icon)
+      ? g_themed_icon_get_names(G_THEMED_ICON(icon))
+      : nullptr;
+  if (!names || !names[0]) return nullptr;
+  GtkIconTheme* theme = gtk_icon_theme_get_default();
+  if (!theme) return nullptr;
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GdkPixbuf) pixbuf = gtk_icon_theme_load_icon(
+      theme, names[0], size, GTK_ICON_LOOKUP_USE_BUILTIN, &error);
+  if (!pixbuf) return nullptr;
+  gchar* data = nullptr;
+  gsize length = 0;
+  if (!gdk_pixbuf_save_to_buffer(pixbuf, &data, &length, "png", &error,
+                                 nullptr)) {
+    return nullptr;
+  }
+  FlValue* value = fl_value_new_uint8_list(reinterpret_cast<uint8_t*>(data), length);
+  g_free(data);
+  return value;
+}
+
+static GAppInfo* app_from_path(const gchar* path) {
+  g_autoptr(GError) error = nullptr;
+  return g_app_info_create_from_commandline(path, nullptr, G_APP_INFO_CREATE_NONE,
+                                            &error);
+}
+
+static FlValue* application_info(GAppInfo* app, GAppInfo* preferred) {
+  g_autoptr(FlValue) info = fl_value_new_map();
+  fl_value_set_string_take(info, "name",
+                           fl_value_new_string(g_app_info_get_display_name(app)));
+  fl_value_set_string_take(info, "path",
+                           fl_value_new_string(g_app_info_get_executable(app)));
+  fl_value_set_string_take(info, "default", fl_value_new_bool(app == preferred));
+  if (GIcon* icon = g_app_info_get_icon(app)) {
+    if (FlValue* bytes = icon_png(icon, 64)) {
+      fl_value_set_string_take(info, "icon", bytes);
+    }
+  }
+  return g_steal_pointer(&info);
+}
+
+static void native_files_handler(FlMethodChannel*, FlMethodCall* call,
+                                 gpointer user_data) {
+  const gchar* method = fl_method_call_get_name(call);
+  GtkWindow* window = GTK_WINDOW(user_data);
+  const std::string path = argument_string(call, "path");
+  if (std::strcmp(method, "fileIcon") == 0) {
+    FlValue* args = fl_method_call_get_args(call);
+    const bool directory = fl_value_get_bool(fl_value_lookup_string(args, "directory"));
+    const gint size = fl_value_get_int(fl_value_lookup_string(args, "pixelSize"));
+    g_autofree gchar* type = directory
+        ? g_strdup("inode/directory")
+        : g_content_type_guess(path.c_str(), nullptr, 0, nullptr);
+    g_autoptr(GIcon) icon = g_content_type_get_icon(type);
+    FlValue* bytes = icon_png(icon, size > 0 ? size : 64);
+    fl_method_call_respond_success(call, bytes ? bytes : fl_value_new_null(), nullptr);
+    if (bytes) fl_value_unref(bytes);
+    return;
+  }
+  g_autofree gchar* type = g_content_type_guess(path.c_str(), nullptr, 0, nullptr);
+  g_autoptr(GAppInfo) preferred = g_app_info_get_default_for_type(type, false);
+  if (std::strcmp(method, "defaultApplication") == 0) {
+    FlValue* value = preferred ? application_info(preferred, preferred) : fl_value_new_null();
+    fl_method_call_respond_success(call, value, nullptr);
+    fl_value_unref(value);
+    return;
+  }
+  if (std::strcmp(method, "applicationsForFile") == 0) {
+    GList* apps = g_app_info_get_all_for_type(type);
+    g_autoptr(FlValue) list = fl_value_new_list();
+    for (GList* item = apps; item; item = item->next) {
+      auto* app = G_APP_INFO(item->data);
+      fl_value_append_take(list, application_info(app, preferred));
+    }
+    g_list_free_full(apps, g_object_unref);
+    fl_method_call_respond_success(call, list, nullptr);
+    return;
+  }
+  if (std::strcmp(method, "openWith") == 0) {
+    const std::string app_path = argument_string(call, "application");
+    g_autoptr(GAppInfo) app = app_from_path(app_path.c_str());
+    g_autoptr(GFile) file = g_file_new_for_path(path.c_str());
+    g_autoptr(GList) files = g_list_prepend(nullptr, file);
+    g_autoptr(GError) error = nullptr;
+    const gboolean launched = app && g_app_info_launch(app, files, nullptr, &error);
+    g_list_free(files);
+    if (!launched) {
+      fl_method_call_respond_error(call, "open_application",
+                                   error ? error->message : "Cannot open application",
+                                   nullptr, nullptr);
+    } else {
+      fl_method_call_respond_success(call, nullptr, nullptr);
+    }
+    return;
+  }
+  if (std::strcmp(method, "chooseApplication") == 0) {
+    GtkWidget* dialog = gtk_app_chooser_dialog_new(window, GTK_DIALOG_MODAL,
+                                                    g_file_new_for_path(path.c_str()));
+    const gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+    GAppInfo* app = response == GTK_RESPONSE_OK
+        ? gtk_app_chooser_get_app_info(GTK_APP_CHOOSER(dialog))
+        : nullptr;
+    FlValue* value = app ? application_info(app, preferred) : fl_value_new_null();
+    fl_method_call_respond_success(call, value, nullptr);
+    fl_value_unref(value);
+    if (app) g_object_unref(app);
+    gtk_widget_destroy(dialog);
+    return;
+  }
+  fl_method_call_respond_not_implemented(call, nullptr);
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+static gboolean hide_auxiliary_window_on_delete(GtkWidget* widget,
+                                                GdkEvent* event,
+                                                gpointer user_data) {
+  gtk_widget_hide(widget);
+  return TRUE;
 }
 
 // Implements GApplication::activate.
@@ -76,10 +209,26 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  auto* registrar = fl_plugin_registry_get_registrar_for_plugin(
+      FL_PLUGIN_REGISTRY(view), "DesktopMultiWindowPlugin");
+  auto* codec = fl_standard_method_codec_new();
+  auto* native_channel = fl_method_channel_new(
+      fl_plugin_registrar_get_messenger(registrar), "dev.hizip/native_files",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      native_channel, native_files_handler, window, nullptr);
+  g_object_unref(codec);
+  g_object_unref(native_channel);
+  g_object_unref(registrar);
   desktop_multi_window_plugin_set_window_created_callback([](FlPluginRegistry* registry) {
     fl_register_plugins(registry);
     auto* registrar = fl_plugin_registry_get_registrar_for_plugin(registry, "HiZipTaskHost");
     auto* child_view = fl_plugin_registrar_get_view(registrar);
+    auto* child_window = gtk_widget_get_toplevel(GTK_WIDGET(child_view));
+    if (GTK_IS_WINDOW(child_window)) {
+      g_signal_connect(child_window, "delete-event",
+                       G_CALLBACK(hide_auxiliary_window_on_delete), nullptr);
+    }
     auto* codec = fl_standard_method_codec_new();
     auto* channel = fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
       "dev.hizip/task-window-host", FL_METHOD_CODEC(codec));
