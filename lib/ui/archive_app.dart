@@ -3134,16 +3134,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                             ),
                             if (desktopLayout && document != null) ...[
                               tool(
-                                '列表视图',
-                                CupertinoIcons.list_bullet,
-                                () => changeView('list'),
-                                active: !grid && !columns && !gallery,
-                              ),
-                              tool(
                                 '图标视图',
                                 CupertinoIcons.square_grid_2x2,
                                 () => changeView('grid'),
                                 active: grid,
+                              ),
+                              tool(
+                                '列表视图',
+                                CupertinoIcons.list_bullet,
+                                () => changeView('list'),
+                                active: !grid && !columns && !gallery,
                               ),
                               tool(
                                 '多栏视图',
@@ -3157,6 +3157,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                 () => changeView('gallery'),
                                 active: gallery,
                               ),
+                              const SizedBox(width: 8),
                               tool(
                                 '预览栏',
                                 CupertinoIcons.sidebar_right,
