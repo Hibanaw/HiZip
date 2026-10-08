@@ -3,39 +3,47 @@ import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 
 import '../models/selection_highlight.dart';
+import '../models/theme_accent.dart';
 import 'app_localizations.dart';
 
-FThemeData _desktopForuiTheme(Brightness brightness) => FThemeData(
-  touch: false,
-  style:
-      (brightness == Brightness.dark
-              ? FThemes.neutral.dark.desktop.style
-              : FThemes.neutral.light.desktop.style)
-          .copyWith(
-            borderRadius: const FBorderRadius(
-              xs: BorderRadius.all(Radius.circular(5)),
-              sm: BorderRadius.all(Radius.circular(5)),
-              md: BorderRadius.all(Radius.circular(5)),
-            ),
-          ),
-  colors: brightness == Brightness.dark
-      ? FThemes.neutral.dark.desktop.colors
-      : FThemes.neutral.light.desktop.colors,
-  typography: FTypography(
-    fontFamily: '.AppleSystemUIFont',
-    xs: const TextStyle(fontSize: 12, height: 1.25),
-    sm: const TextStyle(fontSize: 13, height: 1.3),
-    md: const TextStyle(fontSize: 15, height: 1.4),
-  ),
-);
+FThemeData _desktopForuiTheme(Brightness brightness, {Color? accent}) =>
+    FThemeData(
+      touch: false,
+      style:
+          (brightness == Brightness.dark
+                  ? FThemes.neutral.dark.desktop.style
+                  : FThemes.neutral.light.desktop.style)
+              .copyWith(
+                borderRadius: const FBorderRadius(
+                  xs: BorderRadius.all(Radius.circular(5)),
+                  sm: BorderRadius.all(Radius.circular(5)),
+                  md: BorderRadius.all(Radius.circular(5)),
+                ),
+              ),
+      colors:
+          (brightness == Brightness.dark
+                  ? FThemes.neutral.dark.desktop.colors
+                  : FThemes.neutral.light.desktop.colors)
+              .copyWith(
+                primary: accent,
+                primaryForeground: accent == null ? null : Colors.white,
+              ),
+      typography: FTypography(
+        fontFamily: '.AppleSystemUIFont',
+        xs: const TextStyle(fontSize: 12, height: 1.25),
+        sm: const TextStyle(fontSize: 13, height: 1.3),
+        md: const TextStyle(fontSize: 15, height: 1.4),
+      ),
+    );
 
 final desktopForuiTheme = _desktopForuiTheme(Brightness.light);
 final desktopForuiDarkTheme = _desktopForuiTheme(Brightness.dark);
 
 Widget foruiBuilder(BuildContext context, Widget? child) => FTheme(
-  data: Theme.of(context).brightness == Brightness.dark
-      ? desktopForuiDarkTheme
-      : desktopForuiTheme,
+  data: _desktopForuiTheme(
+    Theme.of(context).brightness,
+    accent: Theme.of(context).colorScheme.primary,
+  ),
   child: child ?? const SizedBox(),
 );
 
@@ -67,11 +75,15 @@ class DesktopButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final emphasized = active || primary;
-    final background = desktopSelectionBackground(context);
+    final background = emphasized
+        ? Theme.of(context).colorScheme.primary
+        : desktopSelectionBackground(context);
     final colors = FTheme.of(context).colors;
     final color = emphasized
         ? onPressed == null
               ? desktopColor(context, 0xff777780, 0xffa0a0a5)
+              : emphasized
+              ? Colors.white
               : desktopSelectionForeground(context)
         : foreground;
     Widget button = FButton.raw(
@@ -361,12 +373,15 @@ class DesktopScrollBehavior extends MaterialScrollBehavior {
       : Scrollbar(controller: details.controller, child: child);
 }
 
-ThemeData desktopTheme({Brightness brightness = Brightness.light}) =>
-    brightness == Brightness.dark
-    ? desktopTheme().copyWith(
+ThemeData desktopTheme({
+  Brightness brightness = Brightness.light,
+  ThemeAccent accent = ThemeAccent.blue,
+}) => brightness == Brightness.dark
+    ? desktopTheme(accent: accent).copyWith(
         brightness: Brightness.dark,
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xff6aa4ff),
+        colorScheme: ColorScheme.dark(
+          primary: accent.color,
+          onPrimary: Colors.white,
           surface: Color(0xff202124),
           onSurface: Color(0xffeeeeef),
         ),
@@ -388,8 +403,9 @@ ThemeData desktopTheme({Brightness brightness = Brightness.light}) =>
     : ThemeData(
         useMaterial3: false,
         brightness: Brightness.light,
-        colorScheme: const ColorScheme.light(
-          primary: Color(0xff3478f6),
+        colorScheme: ColorScheme.light(
+          primary: accent.color,
+          onPrimary: Colors.white,
           secondary: Color(0xff62636a),
           surface: Colors.white,
           onSurface: Color(0xff303036),
@@ -454,7 +470,7 @@ Color fileSelectionBackground(
   BuildContext context,
   SelectionHighlight highlight,
 ) => highlight == SelectionHighlight.blue
-    ? desktopColor(context, 0xff0063d5, 0xff005ac7)
+    ? Theme.of(context).colorScheme.primary
     : desktopSelectionBackground(context);
 
 Color fileSelectionForeground(

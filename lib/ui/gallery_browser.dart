@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../models/archive_entry.dart';
 
@@ -21,6 +22,7 @@ class GalleryBrowser extends StatefulWidget {
     required this.icon,
     required this.item,
     required this.foreground,
+    this.trailing,
   });
   final Object document;
   final bool enabled;
@@ -28,6 +30,7 @@ class GalleryBrowser extends StatefulWidget {
   final ArchiveEntry? selected;
   final double thumbnailSize;
   final Widget preview;
+  final Widget? trailing;
   final Future<Uint8List> Function(ArchiveEntry) loadImage;
   final Widget Function(ArchiveEntry, double) icon;
   final Widget Function(ArchiveEntry, Widget) item;
@@ -165,11 +168,15 @@ class _GalleryBrowserState extends State<GalleryBrowser> {
             child: ListView.builder(
               key: const ValueKey('gallery-filmstrip'),
               controller: scroll,
+              scrollCacheExtent: ScrollCacheExtent.pixels(0),
+              addAutomaticKeepAlives: false,
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               itemExtent: widget.thumbnailSize + 24,
-              itemCount: widget.entries.length,
+              itemCount:
+                  widget.entries.length + (widget.trailing == null ? 0 : 1),
               itemBuilder: (_, index) {
+                if (index == widget.entries.length) return widget.trailing!;
                 final entry = widget.entries[index];
                 final fallback = widget.icon(entry, size);
                 final image =

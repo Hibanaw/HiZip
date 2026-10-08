@@ -6,13 +6,16 @@ import 'package:flutter/foundation.dart';
 import 'package:forui/forui.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/archive_entry.dart';
 import '../models/browsing_preferences.dart';
 import '../models/archive_index.dart';
+import '../models/directory_listing.dart';
 import '../models/preview_text.dart';
 import '../models/preview_limit.dart';
 import '../services/archive_service.dart';
@@ -45,6 +48,7 @@ class _ArchiveTab {
   String folder = '', query = '', status = '';
   List<String> history = [];
   Set<String> expanded = {''}, selection = {};
+  Set<(String, String)> expandedListings = {};
   ArchiveEntry? selected;
   Uint8List? preview;
   String? previewText, previewError;
@@ -91,14 +95,22 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   late final desktop = widget.desktop ?? DesktopIntegration();
   late final clipboard = widget.clipboard ?? FileTransferClipboard();
   final selectedPaths = <String>{};
+  final expandedListings = <(String, String)>{};
   final transferExports = <String, Future<List<String>>>{};
   final fileFocus = FocusNode(debugLabel: 'archive files');
   final searchFocus = FocusNode(debugLabel: 'archive search');
   bool compactSearchOpen = false;
   final listScroll = ScrollController();
   final columnScroll = ScrollController();
+  final pathScroll = ScrollController();
   final columnLists = <String, ScrollController>{};
   double sidebarWidth = 230, inspectorWidth = 270;
+  String listSortColumn = 'name';
+  bool listSortAscending = true;
+  double listNameWidth = 0,
+      listSizeWidth = 85,
+      listModifiedWidth = 115,
+      listKindWidth = 85;
   bool columns = false, gallery = false, inspectorVisible = false;
   final expandedFolders = <String>{''};
   ArchiveFolder folderTree = ArchiveFolder('');
@@ -148,6 +160,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   final search = TextEditingController();
   final recent = <String>[];
   final tabs = <_ArchiveTab>[];
+  List<(_ArchiveTab, ArchiveFolder, int)> sidebarSources = [];
+  List<(_ArchiveTab, ArchiveFolder, int)> sidebarRows = [];
   final sidebarScroll = ScrollController();
   final tabScroll = ScrollController();
   Future<void> openQueue = Future.value();
@@ -157,6 +171,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   ArchiveEntry? selected;
   String folder = '', status = '未打开压缩包';
   bool statusError = false;
+  Timer? statusResetTimer;
   bool busy = false,
       grid = false,
       inspector = true,
@@ -197,6 +212,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     inspector = browsing.inspector;
     sidebarWidth = browsing.sidebarWidth;
     inspectorWidth = browsing.inspectorWidth;
+    listSortColumn = browsing.listSortColumn;
+    listSortAscending = browsing.listSortAscending;
+    listNameWidth = browsing.listNameWidth;
+    listSizeWidth = browsing.listSizeWidth;
+    listModifiedWidth = browsing.listModifiedWidth;
+    listKindWidth = browsing.listKindWidth;
     applySettings();
     settings.addListener(applySettings);
     taskQueue.addListener(queueChanged);
@@ -272,6 +293,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     touchDrops.dispose();
     taskQueue.removeListener(queueChanged);
     timer?.cancel();
+    statusResetTimer?.cancel();
     searchTimer?.cancel();
     warmTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -283,6 +305,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     tabScroll.dispose();
     listScroll.dispose();
     columnScroll.dispose();
+    pathScroll.dispose();
     for (final controller in columnLists.values) {
       controller.dispose();
     }
@@ -320,9 +343,57 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         inspector: inspector,
         sidebarWidth: sidebarWidth,
         inspectorWidth: inspectorWidth,
+        listSortColumn: listSortColumn,
+        listSortAscending: listSortAscending,
+        listNameWidth: listNameWidth,
+        listSizeWidth: listSizeWidth,
+        listModifiedWidth: listModifiedWidth,
+        listKindWidth: listKindWidth,
       ),
     ),
   );
+
+  void sortList(String column) {
+    setState(() {
+      if (listSortColumn == column) {
+        listSortAscending = !listSortAscending;
+      } else {
+        listSortColumn = column;
+        listSortAscending = true;
+      }
+    });
+    saveBrowsingPreferences();
+  }
+
+  void resizeListColumn(String column, double delta, {double? currentWidth}) {
+    setState(() {
+      switch (column) {
+        case 'name':
+          listNameWidth =
+              (listNameWidth == 0 ? currentWidth ?? 260 : listNameWidth) +
+              delta;
+          break;
+        case 'size':
+          listSizeWidth = (listSizeWidth + delta).clamp(65.0, 400.0);
+          break;
+        case 'modified':
+          listModifiedWidth = (listModifiedWidth + delta).clamp(90.0, 400.0);
+          break;
+        case 'kind':
+          listKindWidth = (listKindWidth + delta).clamp(65.0, 300.0);
+          break;
+      }
+      if (column == 'name') listNameWidth = listNameWidth.clamp(160.0, 2000.0);
+    });
+  }
+
+  double listColumnWidth(String column, double fallback) => switch (column) {
+    'name' => listNameWidth == 0 ? fallback : listNameWidth,
+    'size' => listSizeWidth,
+    'modified' => listModifiedWidth,
+    'kind' => listKindWidth,
+    _ => fallback,
+  };
 
   void changeView(String view) {
     setState(() {
@@ -546,12 +617,33 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   void message(String text, {bool error = false, bool showFeedback = true}) {
     if (mounted) {
+      statusResetTimer?.cancel();
       if (showFeedback) feedback.result(text, error: error);
       setState(() {
         status = text;
         statusError = error;
       });
+      if (!error) {
+        statusResetTimer = Timer(const Duration(seconds: 3), () {
+          if (!mounted) return;
+          feedback.action('dismiss');
+          setState(() {
+            status = defaultStatus();
+            statusError = false;
+          });
+        });
+      }
     }
+  }
+
+  String defaultStatus() {
+    final doc = document;
+    if (doc == null) return '未打开压缩包';
+    final count = itemsInFolder(folder).length;
+    final selectedCount = selection.length;
+    return selectedCount == 0
+        ? '$count 个项目'
+        : '$count 个项目 · 已选择 $selectedCount 个项目';
   }
 
   Future<void> pickArchive() async {
@@ -590,6 +682,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     tab.history = List.of(history);
     tab.expanded = Set.of(expandedFolders);
     tab.selection = Set.of(selectedPaths);
+    tab.expandedListings = Set.of(expandedListings);
     tab.selected = selected;
     tab.preview = preview;
     tab.previewText = previewText;
@@ -644,6 +737,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       expandedFolders
         ..clear()
         ..addAll(tab?.expanded ?? {''});
+      expandedListings
+        ..clear()
+        ..addAll(tab?.expandedListings ?? {});
       ++sidebarRevision;
       selected = tab?.selected;
       selectedPaths
@@ -660,7 +756,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       status = tab == null
           ? '未打开压缩包'
           : tab.status.isEmpty
-          ? '${document!.entries.length} 个项目 · ${document!.format}'
+          ? defaultStatus()
           : tab.status;
       statusError = false;
     });
@@ -831,7 +927,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     bool preserveSelection = false,
   }) async {
     final token = ++previewRequest;
-    clearPreparedDrag();
+    if (!entry.directory) clearPreparedDrag();
     setState(() {
       selected = entry;
       if (!preserveSelection) selectedPaths.clear();
@@ -840,7 +936,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       preview = null;
       previewText = null;
       previewError = null;
+      status = defaultStatus();
     });
+    if (entry.directory) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || token != previewRequest) return;
+        clearPreparedDrag();
+        unawaited(desktop.closeQuickLook());
+      });
+      return;
+    }
     warmExport();
     unawaited(updateApplication(entry, token));
     unawaited(updateSystemPreview(entry, token));
@@ -892,12 +997,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       navigate(e.normalized);
       return;
     }
+    final openInHiZip = application == null && isReadableArchivePath(e.name);
     await run(
       () async {
         if (tabFor(doc.path) == null) return;
-        final f = application == null
+        final f = openInHiZip
+            ? await service.prepareExternal(doc, e)
+            : application == null
             ? await service.open(doc, e)
             : await service.prepareExternal(doc, e);
+        if (openInHiZip) {
+          await loadArchive(f.path);
+          return;
+        }
         if (application != null) await desktop.openWith(f.path, application);
         message(
           application == null
@@ -1072,7 +1184,60 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     return const [];
   }
 
-  List<ArchiveEntry> get visibleItems => itemsInFolder(folder);
+  List<ArchiveEntry> sortedListItems(String path) {
+    final entries = List<ArchiveEntry>.of(itemsInFolder(path));
+    entries.sort((a, b) {
+      if (a.directory != b.directory) return a.directory ? -1 : 1;
+      var result = switch (listSortColumn) {
+        'size' => a.size.compareTo(b.size),
+        'modified' => (a.modified?.millisecondsSinceEpoch ?? 0).compareTo(
+          b.modified?.millisecondsSinceEpoch ?? 0,
+        ),
+        'kind' => kind(a).toLowerCase().compareTo(kind(b).toLowerCase()),
+        _ => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      };
+      if (result == 0) {
+        result = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+      return listSortAscending ? result : -result;
+    });
+    return entries;
+  }
+
+  (String, String) listingKey(String path) =>
+      (path, path == folder ? search.text : '');
+
+  DirectoryListing listingInFolder(String path) => DirectoryListing(
+    !grid && !columns && !gallery ? sortedListItems(path) : itemsInFolder(path),
+    expanded: expandedListings.contains(listingKey(path)),
+  );
+
+  List<ArchiveEntry> get visibleItems => listingInFolder(folder);
+
+  Widget remainingItems(String path, DirectoryListing listing) =>
+      FileItemSurface(
+        key: ValueKey('expand-remaining-$path'),
+        name: '双击展开剩余 ${listing.remainingCount} 项',
+        selected: false,
+        onSelect: null,
+        onActivate: busy
+            ? null
+            : () => setState(() {
+                expandedListings.add(listingKey(path));
+              }),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: AppText(
+              '双击展开剩余 ${listing.remainingCount} 项',
+              textAlign: TextAlign.center,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: muted),
+            ),
+          ),
+        ),
+      );
   Future<void> searchFolder(int request) async {
     final doc = document, path = folder, term = search.text;
     if (doc == null || term.isEmpty) return;
@@ -1123,7 +1288,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     setState(() {
       selectedPaths
         ..clear()
-        ..addAll(visibleItems.map((e) => e.path));
+        ..addAll(itemsInFolder(folder).map((e) => e.path));
       selected = visibleItems.firstOrNull;
     });
   }
@@ -1224,6 +1389,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       preview = null;
       previewText = null;
       previewError = null;
+      status = defaultStatus();
     });
   }
 
@@ -1272,6 +1438,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       preview = null;
       previewText = null;
       previewError = null;
+      status = defaultStatus();
       status = '${result.entries.length} 个项目 · ${result.format}';
     });
   }
@@ -2269,7 +2436,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget columnList(String parent) {
-    final items = itemsInFolder(parent);
+    final items = listingInFolder(parent);
     if (items.isEmpty) {
       return Center(
         child: AppText(
@@ -2287,26 +2454,31 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
     return ListView.builder(
       controller: controller,
+      scrollCacheExtent: ScrollCacheExtent.pixels(0),
+      addAutomaticKeepAlives: false,
       padding: const EdgeInsets.all(listInset),
       itemExtent: rowHeight,
-      itemCount: items.length,
-      itemBuilder: (_, i) => row(
-        items[i],
-        true,
-        columnParent: parent,
-        joinPrevious: i > 0 && selectedPaths.contains(items[i - 1].path),
-        joinNext:
-            i + 1 < items.length && selectedPaths.contains(items[i + 1].path),
-        iconSize: rowIconSize,
-        horizontalPadding: rowPadding,
-        height: rowHeight,
-      ),
+      itemCount: items.length + (items.remainingCount > 0 ? 1 : 0),
+      itemBuilder: (_, i) => i == items.length
+          ? remainingItems(parent, items)
+          : row(
+              items[i],
+              true,
+              columnParent: parent,
+              joinPrevious: i > 0 && selectedPaths.contains(items[i - 1].path),
+              joinNext:
+                  i + 1 < items.length &&
+                  selectedPaths.contains(items[i + 1].path),
+              iconSize: rowIconSize,
+              horizontalPadding: rowPadding,
+              height: rowHeight,
+            ),
     );
   }
 
   Future<void> chooseOpenApplication(ArchiveEntry entry) async {
     try {
-      final app = await desktop.chooseApplication();
+      final app = await desktop.chooseApplication(entry.name);
       if (app != null && mounted) await openEntry(entry, application: app);
     } catch (e) {
       if (mounted) message(e.toString(), error: true);
@@ -2385,13 +2557,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         : () => newEntry(
             destination: entry.directory ? entry.normalized : folder,
           ),
-    applications: desktop.supportsQuickLook && entry.canExtract
+    applications: desktop.supportsFileIntegration && entry.canExtract
         ? () => desktop.applicationsForFile(entry.name)
         : null,
-    onOpenWith: busy || !desktop.supportsQuickLook || !entry.canExtract
+    onOpenWith: busy || !desktop.supportsFileIntegration || !entry.canExtract
         ? null
         : (app) => openEntry(entry, application: app),
-    onChooseApplication: busy || !desktop.supportsQuickLook
+    onChooseApplication: busy || !desktop.supportsFileIntegration
         ? null
         : () => chooseOpenApplication(entry),
     onTouchDragStart:
@@ -2458,6 +2630,23 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget sidebar() {
+    final sources = [
+      for (final tab in tabs)
+        (
+          tab,
+          tab.document.index.tree,
+          tab.document.path == document?.path ? sidebarRevision : tab.revision,
+        ),
+    ];
+    if (!listEquals(sidebarSources, sources)) {
+      sidebarSources = sources;
+      sidebarRows = buildSidebarRows();
+    }
+    final rows = sidebarRows;
+    return sidebarContent(rows);
+  }
+
+  List<(_ArchiveTab, ArchiveFolder, int)> buildSidebarRows() {
     final rows = <(_ArchiveTab, ArchiveFolder, int)>[];
     for (final tab in tabs) {
       final active = tab.document.path == document?.path;
@@ -2482,6 +2671,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       }
       rows.addAll(tab.rows.map((row) => (tab, row.$1, row.$2)));
     }
+    return rows;
+  }
+
+  Widget sidebarContent(List<(_ArchiveTab, ArchiveFolder, int)> rows) {
     return Container(
       decoration: BoxDecoration(
         color: desktopColor(context, 0xfff3f3f3, 0xff27282b),
@@ -2503,6 +2696,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
                   )
                 : ListView.builder(
+                    scrollCacheExtent: ScrollCacheExtent.pixels(0),
+                    addAutomaticKeepAlives: false,
                     controller: sidebarScroll,
                     padding: const EdgeInsets.all(listInset),
                     itemCount: rows.length,
@@ -3034,24 +3229,46 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
-  Widget pathNavigation() => SingleChildScrollView(
-    key: const ValueKey('path-navigation'),
-    scrollDirection: Axis.horizontal,
-    child: Row(
-      children: [
-        crumb(p.basename(document!.path), () => navigate('')),
-        for (
-          var i = 0;
-          i < (folder.isEmpty ? 0 : folder.split('/').length);
-          i++
-        ) ...[
-          const Icon(CupertinoIcons.chevron_right, size: 9, color: muted),
-          crumb(
-            folder.split('/')[i],
-            () => navigate(folder.split('/').take(i + 1).join('/')),
+  Widget pathNavigation() => Align(
+    alignment: Alignment.centerLeft,
+    child: Listener(
+      key: const ValueKey('path-navigation'),
+      onPointerSignal: (event) {
+        if (event is! PointerScrollEvent || !pathScroll.hasClients) return;
+        final delta = event.scrollDelta.dx != 0
+            ? event.scrollDelta.dx
+            : event.scrollDelta.dy;
+        if (delta == 0) return;
+        pathScroll.jumpTo(
+          (pathScroll.offset + delta).clamp(
+            0.0,
+            pathScroll.position.maxScrollExtent,
           ),
-        ],
-      ],
+        );
+      },
+      child: IntrinsicWidth(
+        child: SingleChildScrollView(
+          controller: pathScroll,
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              crumb(p.basename(document!.path), () => navigate('')),
+              for (
+                var i = 0;
+                i < (folder.isEmpty ? 0 : folder.split('/').length);
+                i++
+              ) ...[
+                const Icon(CupertinoIcons.chevron_right, size: 9, color: muted),
+                crumb(
+                  folder.split('/')[i],
+                  () => navigate(folder.split('/').take(i + 1).join('/')),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     ),
   );
 
@@ -3077,7 +3294,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   );
 
   Widget browser() {
-    final items = visibleItems;
+    final items = listingInFolder(folder);
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: () {
@@ -3139,6 +3356,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         gridSpacing = spacing;
                         return GridView.builder(
                           controller: listScroll,
+                          scrollCacheExtent: ScrollCacheExtent.pixels(0),
+                          addAutomaticKeepAlives: false,
                           padding: EdgeInsets.all(margin),
                           gridDelegate:
                               SliverGridDelegateWithFixedCrossAxisCount(
@@ -3147,91 +3366,116 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                 mainAxisSpacing: spacing,
                                 crossAxisSpacing: spacing,
                               ),
-                          itemCount: items.length,
-                          itemBuilder: (_, i) =>
-                              tile(items[i], displaySize: displaySize),
+                          itemCount:
+                              items.length + (items.remainingCount > 0 ? 1 : 0),
+                          itemBuilder: (_, i) => i == items.length
+                              ? remainingItems(folder, items)
+                              : tile(items[i], displaySize: displaySize),
                         );
                       }
-                      return Column(
-                        children: [
-                          Container(
-                            height: 27,
-                            color: desktopColor(
-                              context,
-                              0xfff7f7f7,
-                              0xff292a2e,
-                            ),
-                            padding: EdgeInsets.symmetric(
-                              horizontal: rowPadding + listInset,
-                            ),
-                            child: Row(
-                              children: [
-                                const Expanded(
-                                  child: AppText(
-                                    '名称',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: muted,
-                                    ),
+                      final metadataWidth = compact
+                          ? 0.0
+                          : listSizeWidth + listModifiedWidth + listKindWidth;
+                      final availableWidth =
+                          (constraints.maxWidth - 2 * (rowPadding + listInset))
+                              .clamp(160.0, double.infinity);
+                      final nameWidth = listColumnWidth(
+                        'name',
+                        availableWidth - metadataWidth,
+                      ).clamp(160.0, double.infinity);
+                      final contentWidth = nameWidth + metadataWidth;
+                      final listWidth =
+                          contentWidth + 2 * (rowPadding + listInset);
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: listWidth > constraints.maxWidth
+                              ? listWidth
+                              : constraints.maxWidth,
+                          child: Column(
+                            children: [
+                              Container(
+                                height: 27,
+                                color: desktopColor(
+                                  context,
+                                  0xfff7f7f7,
+                                  0xff292a2e,
+                                ),
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: rowPadding + listInset,
+                                ),
+                                child: SizedBox(
+                                  width: contentWidth,
+                                  child: Row(
+                                    children: [
+                                      listHeaderCell('名称', 'name', nameWidth),
+                                      if (!compact) ...[
+                                        listHeaderCell(
+                                          '大小',
+                                          'size',
+                                          listSizeWidth,
+                                        ),
+                                        listHeaderCell(
+                                          '修改日期',
+                                          'modified',
+                                          listModifiedWidth,
+                                        ),
+                                        listHeaderCell(
+                                          '种类',
+                                          'kind',
+                                          listKindWidth,
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
-                                if (!compact) ...[
-                                  const SizedBox(
-                                    width: 85,
-                                    child: AppText(
-                                      '大小',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(
-                                    width: 115,
-                                    child: AppText(
-                                      '修改日期',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(
-                                    width: 85,
-                                    child: AppText(
-                                      '种类',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            child: ListView.builder(
-                              controller: listScroll,
-                              padding: const EdgeInsets.all(listInset),
-                              itemExtent: rowHeight,
-                              itemCount: items.length,
-                              itemBuilder: (_, i) => row(
-                                items[i],
-                                compact,
-                                joinPrevious:
-                                    i > 0 &&
-                                    selectedPaths.contains(items[i - 1].path),
-                                joinNext:
-                                    i + 1 < items.length &&
-                                    selectedPaths.contains(items[i + 1].path),
-                                iconSize: rowIconSize,
-                                horizontalPadding: rowPadding,
-                                height: rowHeight,
                               ),
-                            ),
+                              Expanded(
+                                child: ListView.builder(
+                                  controller: listScroll,
+                                  scrollCacheExtent: ScrollCacheExtent.pixels(
+                                    0,
+                                  ),
+                                  addAutomaticKeepAlives: false,
+                                  padding: const EdgeInsets.all(listInset),
+                                  itemExtent: rowHeight,
+                                  itemCount:
+                                      items.length +
+                                      (items.remainingCount > 0 ? 1 : 0),
+                                  itemBuilder: (_, i) => i == items.length
+                                      ? remainingItems(folder, items)
+                                      : row(
+                                          items[i],
+                                          compact,
+                                          joinPrevious:
+                                              i > 0 &&
+                                              selectedPaths.contains(
+                                                items[i - 1].path,
+                                              ),
+                                          joinNext:
+                                              i + 1 < items.length &&
+                                              selectedPaths.contains(
+                                                items[i + 1].path,
+                                              ),
+                                          iconSize: rowIconSize,
+                                          horizontalPadding: rowPadding,
+                                          height: rowHeight,
+                                          nameWidth: nameWidth,
+                                          sizeWidth: compact
+                                              ? null
+                                              : listSizeWidth,
+                                          modifiedWidth: compact
+                                              ? null
+                                              : listModifiedWidth,
+                                          kindWidth: compact
+                                              ? null
+                                              : listKindWidth,
+                                        ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       );
                     },
                   ),
@@ -3279,8 +3523,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
   bool activeFileSelection(ArchiveEntry entry, {String? columnParent}) =>
-      selectedPaths.contains(entry.path) &&
-      (!columns || columnParent == columnPaths.last);
+      selectedPaths.contains(entry.path);
 
   Color entryForeground(
     ArchiveEntry entry, {
@@ -3295,6 +3538,103 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       : selectedPaths.contains(entry.path)
       ? desktopSelectionForeground(context, secondary: secondary)
       : (secondary ? muted : Theme.of(context).colorScheme.onSurface);
+
+  Widget listHeaderCell(String label, String column, double width) {
+    final active = listSortColumn == column;
+    return SizedBox(
+      width: width,
+      height: 27,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: busy ? null : () => sortList(column),
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: AppText(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: muted),
+                    ),
+                  ),
+                  if (active)
+                    Icon(
+                      listSortAscending
+                          ? CupertinoIcons.chevron_up
+                          : CupertinoIcons.chevron_down,
+                      size: 10,
+                      color: muted,
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 8,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragUpdate: busy
+                  ? null
+                  : (details) => resizeListColumn(
+                      column,
+                      details.delta.dx,
+                      currentWidth: width,
+                    ),
+              onHorizontalDragEnd: busy
+                  ? null
+                  : (_) => saveBrowsingPreferences(),
+              child: const SizedBox(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget rowName(
+    ArchiveEntry e,
+    bool compact, {
+    String? columnParent,
+    double iconSize = 22,
+  }) => Row(
+    children: [
+      fileIcon(e, size: iconSize),
+      SizedBox(width: (iconSize * .25).clamp(3.0, 8.0)),
+      Expanded(
+        child: Text(
+          e.name,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            color: entryForeground(e, columnParent: columnParent),
+          ),
+        ),
+      ),
+      if (columns && compact && e.directory)
+        Icon(
+          CupertinoIcons.chevron_right,
+          size: 10,
+          color: entryForeground(
+            e,
+            secondary: true,
+            columnParent: columnParent,
+          ),
+        ),
+      if (e.encrypted || !e.safe)
+        const Padding(
+          padding: EdgeInsets.only(right: 8),
+          child: Icon(CupertinoIcons.lock, size: 13, color: muted),
+        ),
+    ],
+  );
+
   Widget row(
     ArchiveEntry e,
     bool compact, {
@@ -3304,6 +3644,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     double iconSize = 22,
     double horizontalPadding = 14,
     double height = 36,
+    double? nameWidth,
+    double? sizeWidth,
+    double? modifiedWidth,
+    double? kindWidth,
   }) => contextMenu(
     e,
     SizedBox(
@@ -3344,36 +3688,28 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
             child: Row(
               children: [
-                fileIcon(e, size: iconSize),
-                SizedBox(width: (iconSize * .25).clamp(3.0, 8.0)),
-                Expanded(
-                  child: Text(
-                    e.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: entryForeground(e, columnParent: columnParent),
-                    ),
-                  ),
-                ),
-                if (columns && compact && e.directory)
-                  Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 10,
-                    color: entryForeground(
+                if (nameWidth == null)
+                  Expanded(
+                    child: rowName(
                       e,
-                      secondary: true,
+                      compact,
                       columnParent: columnParent,
+                      iconSize: iconSize,
                     ),
-                  ),
-                if (e.encrypted || !e.safe)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: Icon(CupertinoIcons.lock, size: 13, color: muted),
+                  )
+                else
+                  SizedBox(
+                    width: nameWidth,
+                    child: rowName(
+                      e,
+                      compact,
+                      columnParent: columnParent,
+                      iconSize: iconSize,
+                    ),
                   ),
                 if (!compact) ...[
                   SizedBox(
-                    width: 85,
+                    width: sizeWidth ?? 85,
                     child: AppText(
                       e.directory ? '—' : formatSize(e.size),
                       style: TextStyle(
@@ -3387,7 +3723,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
                   ),
                   SizedBox(
-                    width: 115,
+                    width: modifiedWidth ?? 115,
                     child: AppText(
                       date(e.modified),
                       style: TextStyle(
@@ -3401,7 +3737,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
                   ),
                   SizedBox(
-                    width: 85,
+                    width: kindWidth ?? 85,
                     child: AppText(
                       kind(e),
                       style: TextStyle(
@@ -3478,12 +3814,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
-  Widget galleryBrowser(List<ArchiveEntry> items) {
+  Widget galleryBrowser(DirectoryListing items) {
     final doc = document!;
     return GalleryBrowser(
       document: doc,
       enabled: !busy && !closing,
       entries: items,
+      trailing: items.remainingCount > 0 ? remainingItems(folder, items) : null,
       selected: selected,
       thumbnailSize: galleryIconSize,
       preview: previewContent(large: true, centerImage: true),
@@ -3614,7 +3951,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   );
 
   Widget openButton({bool compact = false}) {
-    final split = desktop.supportsQuickLook && selected != null;
+    final split = desktop.supportsFileIntegration && selected != null;
     final label = selectedApplication == null
         ? '在默认应用中打开'
         : '用 ${selectedApplication!.name} 打开';
@@ -3690,28 +4027,47 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     BoxConstraints constraints, {
     required Widget preview,
     required Widget information,
-  }) => SingleChildScrollView(
-    padding: const EdgeInsets.all(16),
-    child: ConstrainedBox(
-      constraints: BoxConstraints(
-        minHeight: (constraints.maxHeight - 32).clamp(0, double.infinity),
+    required Widget actions,
+  }) => Column(
+    children: [
+      Expanded(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: (constraints.maxHeight - 32).clamp(0, double.infinity),
+            ),
+            child: Column(
+              mainAxisAlignment: gallery
+                  ? MainAxisAlignment.start
+                  : MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: gallery
+                  ? [information]
+                  : [
+                      preview,
+                      Padding(
+                        padding: const EdgeInsets.only(top: 24),
+                        child: information,
+                      ),
+                    ],
+            ),
+          ),
+        ),
       ),
-      child: Column(
-        mainAxisAlignment: gallery
-            ? MainAxisAlignment.start
-            : MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: gallery
-            ? [information]
-            : [
-                preview,
-                Padding(
-                  padding: const EdgeInsets.only(top: 24),
-                  child: information,
-                ),
-              ],
+      DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerColor),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: actions,
+        ),
       ),
-    ),
+    ],
   );
 
   Widget inspectorPanel() => Container(
@@ -3785,10 +4141,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               ),
               info('修改日期', date(selected!.modified)),
               info('路径', selected!.normalized),
-              const SizedBox(height: 12),
-              selectionActions(),
             ],
           ),
+          actions: selectionActions(),
         );
       },
     ),
@@ -3913,10 +4268,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           const SizedBox(height: 8),
           info('大小', formatSize(size)),
           info('项目', '${entries.length} 个'),
-          const SizedBox(height: 12),
-          selectionActions(),
         ],
       ),
+      actions: selectionActions(),
     );
   }
 
@@ -4011,10 +4365,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           info('大小', formatSize(totalSize)),
           info('路径', archive ? document!.path : summaryFolder),
           if (archive) info('状态', document!.writable ? '可写入' : '只读'),
-          const SizedBox(height: 12),
-          selectionActions(),
         ],
       ),
+      actions: selectionActions(),
     );
   }
 
@@ -4113,6 +4466,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     final running = tasks.where((task) => task.running).firstOrNull;
     final active = data?.running == true ? data : null;
     final overallProgress = active?.progress ?? progress;
+    final showProgress =
+        overallProgress != null || active != null || running != null;
     final text = active != null
         ? '${appText(context, active.title)}${active.currentFile.isEmpty ? '' : ' · ${active.currentFile}'}${active.fileProgress == null ? '' : ' · ${appText(context, '当前文件')} ${(active.fileProgress!.clamp(0, 1) * 100).round()}%'}${overallProgress == null ? '' : ' · ${appText(context, '全部进度')} ${(overallProgress.clamp(0, 1) * 100).round()}%'}'
         : running != null
@@ -4122,8 +4477,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               ? appText(context, data.title)
               : appText(context, data.detail))
         : appText(context, status);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
         if (confirmation)
           Container(
@@ -4171,59 +4526,68 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             ),
           ),
         if (queueExpanded)
-          Container(
-            key: const ValueKey('archive-task-queue'),
-            width: double.infinity,
-            constraints: const BoxConstraints(maxHeight: 180),
-            decoration: BoxDecoration(
-              color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
-              border: Border(
-                top: BorderSide(
-                  color: desktopColor(context, 0xffdadada, 0xff414248),
-                ),
-              ),
+          Positioned(
+            right: 8,
+            bottom: 36,
+            width: 360,
+            child: Card(
+              key: const ValueKey('archive-task-queue'),
+              margin: EdgeInsets.zero,
+              elevation: 8,
+              clipBehavior: Clip.antiAlias,
+              child: tasks.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: AppText('队列为空', style: TextStyle(fontSize: 12)),
+                    )
+                  : ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 260),
+                      child: ListView(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.all(8),
+                        children: [
+                          for (final task in tasks)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    task.running
+                                        ? Icons.play_arrow
+                                        : Icons.schedule,
+                                    size: 14,
+                                    color: muted,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: AppText(
+                                      '${p.basename(task.archive)} · ${appText(context, task.title)}${task.cancelled ? ' · 正在取消' : ''}',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    key: ValueKey(
+                                      'cancel-task-${task.archive}-${task.title}',
+                                    ),
+                                    tooltip: '取消任务',
+                                    icon: const Icon(Icons.close, size: 16),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 28,
+                                      height: 28,
+                                    ),
+                                    onPressed: task.cancelled
+                                        ? null
+                                        : () => taskQueue.cancel(task),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
             ),
-            child: tasks.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: AppText('队列为空', style: TextStyle(fontSize: 12)),
-                  )
-                : ListView(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.all(8),
-                    children: [
-                      for (final task in tasks)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              Icon(
-                                task.running
-                                    ? Icons.play_arrow
-                                    : Icons.schedule,
-                                size: 14,
-                                color: muted,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: AppText(
-                                  '${p.basename(task.archive)} · ${appText(context, task.title)}',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              ),
-                              AppText(
-                                task.running ? '进行中' : '等待中',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: muted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
           ),
         Container(
           height: 30,
@@ -4254,12 +4618,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                   ),
                 ),
               ),
-              if (overallProgress != null) ...[
+              if (showProgress) ...[
                 const SizedBox(width: 8),
                 SizedBox(
                   width: 80,
                   child: LinearProgressIndicator(
-                    value: overallProgress.clamp(0, 1),
+                    value: overallProgress?.clamp(0, 1),
                     minHeight: 3,
                   ),
                 ),

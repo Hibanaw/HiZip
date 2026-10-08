@@ -132,6 +132,17 @@ void main() {
           find.text(fails ? 'input is truncated' : '已打开压缩包：second.zip'),
           findsOneWidget,
         );
+        if (!fails) {
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pump();
+          expect(find.text('已打开压缩包：second.zip'), findsNothing);
+          expect(
+            tester
+                .widget<Text>(find.byKey(const ValueKey('archive-status')))
+                .data,
+            contains('个项目'),
+          );
+        }
         expect(find.byKey(const ValueKey('overall-progress')), findsNothing);
         expect(state.document.path, fails ? first.path : second.path);
         await tester.pumpWidget(const SizedBox());

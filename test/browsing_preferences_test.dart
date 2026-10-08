@@ -35,6 +35,12 @@ void main() {
         inspector: false,
         sidebarWidth: 280,
         inspectorWidth: 320,
+        listSortColumn: 'modified',
+        listSortAscending: false,
+        listNameWidth: 360,
+        listSizeWidth: 100,
+        listModifiedWidth: 150,
+        listKindWidth: 110,
       ),
     );
     final second = create();

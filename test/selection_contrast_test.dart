@@ -38,12 +38,11 @@ void main() {
           .firstWhere(
             (color) =>
                 color ==
-                desktopSelectionBackground(tester.element(find.text('选中'))),
+                Theme.of(tester.element(find.text('选中'))).colorScheme.primary,
           );
       final a = foreground.computeLuminance() + .05;
       final b = background.computeLuminance() + .05;
       final ratio = a > b ? a / b : b / a;
-      expect((background.r - background.b).abs(), lessThan(.025));
       expect(ratio, greaterThanOrEqualTo(4.5));
       expect(
         IconTheme.of(tester.element(find.byIcon(Icons.folder))).color,

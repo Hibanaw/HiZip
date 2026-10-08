@@ -355,11 +355,25 @@ void main() {
       tester
           .widget<FileItemSurface>(find.byKey(const ValueKey('file-docs')))
           .activeSelection,
-      false,
+      true,
     );
     await tester.tap(find.byKey(const ValueKey('file-docs/nested')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('column-docs/nested')), findsOneWidget);
+    expect(
+      tester
+          .widget<FileItemSurface>(
+            find.byKey(const ValueKey('file-docs/nested')),
+          )
+          .activeSelection,
+      true,
+    );
+    expect(
+      tester
+          .widget<FileItemSurface>(find.byKey(const ValueKey('file-docs')))
+          .activeSelection,
+      false,
+    );
     await tester.tap(find.byKey(const ValueKey('file-docs/nested/a.txt')));
     await tester.pumpAndSettle();
     final file = find.byKey(const ValueKey('file-docs/nested/a.txt'));
