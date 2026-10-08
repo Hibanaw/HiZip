@@ -3249,9 +3249,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         TextSpan(
                           text: 'Hi',
                           style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.primary.withValues(alpha: .5),
+                            color: Theme.of(context).colorScheme.primary
+                                .withValues(alpha: .5),
                           ),
                         ),
                         const TextSpan(text: 'Zip'),
@@ -4366,13 +4365,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         : document!.index.sizes[summaryFolder] ?? 0;
     final itemCount = archive
         ? document!.entries.length
-        : document!.entries
-              .where(
-                (entry) =>
-                    entry.normalized == summaryFolder ||
-                    entry.normalized.startsWith('$summaryFolder/'),
-              )
-              .length;
+        : document!.index.descendants[summaryFolder] ?? 0;
     return inspectorLayout(
       constraints,
       preview: Container(
