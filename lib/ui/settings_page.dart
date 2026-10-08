@@ -40,7 +40,7 @@ class _SettingsPageState extends State<SettingsPage>
   void updateWindowTitle() {
     if (widget.systemFrame) {
       setAuxiliaryWindowTitle(
-        'HiZip · ${settings.locale.languageCode == "en" ? "Settings" : "设置"}',
+        'HiZip · ${translateAppText('设置', settings.locale.languageCode)}',
       );
     }
   }
@@ -161,7 +161,8 @@ class _SettingsPageState extends State<SettingsPage>
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final sidebarWidth = settings.locale.languageCode == 'en'
+                  final sidebarWidth =
+                      !['zh', 'ja', 'ko'].contains(settings.locale.languageCode)
                       ? (constraints.maxWidth < 500 ? 152.0 : 170.0)
                       : (constraints.maxWidth < 500 ? 116.0 : 150.0);
                   final content = ListenableBuilder(
@@ -218,24 +219,16 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
+                                DesktopSelect<AppLanguage>(
+                                  key: const ValueKey('language-select'),
+                                  value: settings.language,
+                                  items: {
                                     for (final value in AppLanguage.values)
-                                      DesktopButton(
-                                        active: settings.language == value,
-                                        onPressed: settings.saving
-                                            ? null
-                                            : () => settings.setLanguage(value),
-                                        child: AppText(switch (value) {
-                                          AppLanguage.system => '跟随系统',
-                                          AppLanguage.simplifiedChinese =>
-                                            '简体中文',
-                                          AppLanguage.english => 'English',
-                                        }),
-                                      ),
-                                  ],
+                                      value.label: value,
+                                  },
+                                  onChanged: settings.saving
+                                      ? null
+                                      : settings.setLanguage,
                                 ),
                                 const SizedBox(height: 8),
                                 const AppText(
@@ -291,7 +284,7 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 24),
-                                Row(
+                                Wrap(
                                   children: [
                                     const AppText(
                                       '界面 DPI',

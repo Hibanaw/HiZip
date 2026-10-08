@@ -121,9 +121,8 @@ Future<Widget?> initializeTaskWindows() async {
             ? null
             : settings.locale,
 
-        supportedLocales: const [Locale('zh'), Locale('en')],
-        localeResolutionCallback: (locale, _) =>
-            Locale(locale?.languageCode == 'zh' ? 'zh' : 'en'),
+        supportedLocales: supportedAppLocales,
+        localeResolutionCallback: (locale, _) => resolveAppLocale(locale),
 
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         builder: (context, child) => AppLanguageScope(
@@ -158,7 +157,7 @@ Future<Widget?> initializeTaskWindows() async {
     Map<String, dynamic>.from(args['bounds'] as Map? ?? const {}),
   );
   setAuxiliaryWindowTitle(
-    'HiZip · ${AppSettings.instance.locale.languageCode == "en" ? "Operation Information" : "操作信息"}',
+    'HiZip · ${translateAppText('操作信息', AppSettings.instance.locale.languageCode)}',
   );
   await current.setWindowMethodHandler((call) async {
     if (call.method == 'update') {
@@ -173,7 +172,7 @@ Future<Widget?> initializeTaskWindows() async {
         payload['language'] as String? ?? 'simplifiedChinese',
       );
       setAuxiliaryWindowTitle(
-        'HiZip · ${AppSettings.instance.locale.languageCode == "en" ? "Operation Information" : "操作信息"}',
+        'HiZip · ${translateAppText('操作信息', AppSettings.instance.locale.languageCode)}',
       );
       state.value = TaskFeedback.fromJson(payload);
       return true;
@@ -314,9 +313,8 @@ class _TaskWindowApp extends StatelessWidget {
           ? null
           : AppSettings.instance.locale,
 
-      supportedLocales: const [Locale('zh'), Locale('en')],
-      localeResolutionCallback: (locale, _) =>
-          Locale(locale?.languageCode == 'zh' ? 'zh' : 'en'),
+      supportedLocales: supportedAppLocales,
+      localeResolutionCallback: (locale, _) => resolveAppLocale(locale),
 
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       builder: (context, child) => AppLanguageScope(

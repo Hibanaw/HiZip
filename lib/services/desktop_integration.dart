@@ -157,11 +157,19 @@ class DesktopIntegration {
   }
 
   String? _language;
-  Future<void> setLanguage(String language) async {
+  Future<void> setLanguage(
+    String language, {
+    Map<String, String> translations = const {},
+    Map<String, String> english = const {},
+  }) async {
     if (!supportsQuickLook || _language == language) return;
     _language = language;
     try {
-      await channel.invokeMethod<void>('language', language);
+      await channel.invokeMethod<void>('language', {
+        'language': language,
+        'translations': translations,
+        'english': english,
+      });
     } on MissingPluginException {
       /* No native menus on this target. */
     }

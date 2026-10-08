@@ -226,7 +226,7 @@ class _FileContextMenuState extends State<FileContextMenu>
                   children: [
                     const Icon(Icons.open_with, size: 16),
                     const SizedBox(width: 6),
-                    Text(widget.touchDragLabel ?? '拖动'),
+                    Text(widget.touchDragLabel ?? appText(context, '拖动')),
                   ],
                 ),
               ),

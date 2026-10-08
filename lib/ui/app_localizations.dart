@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'translations.dart';
+
 class AppLanguageScope extends InheritedWidget {
   const AppLanguageScope({
     super.key,
@@ -21,15 +23,34 @@ String appText(BuildContext context, String text) => translateAppText(
 );
 
 String translateAppText(String text, String language) {
-  if (language != 'en') return text;
+  if (language == 'zh') return _chineseTerminology[text] ?? text;
   if (text.startsWith('✓ ')) {
     return '✓ ${translateAppText(text.substring(2), language)}';
   }
-  final exact = _english[text];
-  if (exact != null) return exact;
+  final exact = appEnglishMessages[text];
+  if (exact != null) return localizedMessage(exact, language);
   for (final entry in _patterns.entries) {
     final match = entry.key.firstMatch(text);
-    if (match != null) return entry.value(match);
+    if (match != null) {
+      var template = localizedMessage(entry.value, language);
+      if (language == 'en' && match[1] == '1') {
+        template = template
+            .replaceAll('items', 'item')
+            .replaceAll('files', 'file')
+            .replaceAll('threads', 'thread');
+      }
+      if (language == 'en' &&
+          entry.value == '{1} files, {2} folders' &&
+          match[2] == '1') {
+        template = template.replaceAll('folders', 'folder');
+      }
+      return template.replaceAllMapped(RegExp(r'\{(\d+)\}'), (placeholder) {
+        final value = match[int.parse(placeholder[1]!)];
+        return entry.value == 'ZIP compression level: {1}' && value == '不压缩'
+            ? localizedMessage('Store', language)
+            : value ?? '';
+      });
+    }
   }
   return text;
 }
@@ -71,46 +92,62 @@ class AppText extends StatelessWidget {
   );
 }
 
-final _patterns = <RegExp, String Function(RegExpMatch)>{
-  RegExp(r'^双击展开剩余 (\d+) 项$'): (m) =>
-      'Double-click to show ${m[1]} remaining items',
-  RegExp(r'^队列 \((\d+)\)$'): (m) => 'Queue (${m[1]})',
-  RegExp(r'^已删除 (\d+) 个项目$'): (m) => 'Deleted ${m[1]} items',
-  RegExp(r'^(\d+) 个所选项目将从压缩包中删除，文件夹内的内容也会删除。$'): (m) =>
-      '${m[1]} selected items will be deleted from the archive, including folder contents.',
-
-  RegExp(r'^已打开压缩包：(.+)$'): (m) => 'Opened archive: ${m[1]}',
-  RegExp(r'^已关闭压缩包：(.+)$'): (m) => 'Closed archive: ${m[1]}',
-  RegExp(r'^预览已就绪：(.+)$'): (m) => 'Preview ready: ${m[1]}',
-  RegExp(r'^文件已准备好：(.+)$'): (m) => 'File ready: ${m[1]}',
-  RegExp(r'^拖拽完成：(\d+) 个项目$'): (m) => 'Drag complete: ${m[1]} items',
-  RegExp(r'^(.+) 个线程$'): (m) => '${m[1]} threads',
-  RegExp(r'^创建 ZIP 的压缩等级：(.+)$'): (m) =>
-      'ZIP compression level: ${m[1] == "不压缩" ? "Store" : m[1]}',
-  RegExp(r'^(\d+) 个项目(.*)$'): (m) =>
-      '${m[1]} items${m[2]!.replaceAllMapped(RegExp(r' · 已选 (\d+) 个'), (selection) => ' · ${selection[1]} selected')}',
-  RegExp(r'^(.+) 个文件、(.+) 个文件夹$'): (m) => '${m[1]} files, ${m[2]} folders',
-  RegExp(r'^(.+) 个$'): (m) => '${m[1]}',
-  RegExp(r'^用 (.+) 打开$'): (m) => 'Open with ${m[1]}',
-  RegExp(r'^(.+)（默认）$'): (m) => '${m[1]} (default)',
-  RegExp(r'^正在解压 (.+)$'): (m) => 'Extracting ${m[1]}',
-  RegExp(r'^(.+) 个文件 · (.+)$'): (m) => '${m[1]} files · ${m[2]}',
-  RegExp(r'^解压完成：(.+)$'): (m) => 'Extracted to: ${m[1]}',
-  RegExp(r'^已复制 (.+) 个项目$'): (m) => 'Copied ${m[1]} items',
-  RegExp(r'^已传入 (.+) 个项目$'): (m) => 'Imported ${m[1]} items',
-  RegExp(r'^已移动 (.+) 个项目$'): (m) => 'Moved ${m[1]} items',
-  RegExp(r'^拖拽 (.+) 个项目$'): (m) => 'Dragging ${m[1]} items',
-  RegExp(r'^已用 (.+) 打开 · 修改检测已开启$'): (m) =>
-      'Opened with ${m[1]} · Watching for changes',
-  RegExp(r'^(.+) 文件$'): (m) => '${m[1]} file',
+final _patterns = <RegExp, String>{
+  RegExp(r'^双击展开剩余 (\d+) 项$'): 'Double-click to show {1} remaining items',
+  RegExp(r'^队列 \((\d+)\)$'): 'Queue ({1})',
+  RegExp(r'^已删除 (\d+) 个项目$'): 'Deleted {1} items',
+  RegExp(r'^(\d+) 个所选项目将从压缩包中删除，文件夹内的内容也会删除。$'): '{1} selected items will be deleted from the archive, including folder contents.',
+  RegExp(r'^已打开压缩包：(.+)$'): 'Opened archive: {1}',
+  RegExp(r'^已关闭压缩包：(.+)$'): 'Closed archive: {1}',
+  RegExp(r'^预览已就绪：(.+)$'): 'Preview ready: {1}',
+  RegExp(r'^文件已准备好：(.+)$'): 'File ready: {1}',
+  RegExp(r'^拖拽完成：(\d+) 个项目$'): 'Drag complete: {1} items',
+  RegExp(r'^(\d+) 个线程$'): '{1} threads',
+  RegExp(r'^创建 ZIP 的压缩等级：(.+)$'): 'ZIP compression level: {1}',
+  RegExp(r'^(\d+) 个项目 · (?:已选择 (\d+) 个项目|已选 (\d+) 个)$'):
+      '{1} items · {2}{3} selected',
+  RegExp(r'^(\d+) 个项目 · (.+)$'): '{1} items · {2}',
+  RegExp(r'^(\d+) 个项目$'): '{1} items',
+  RegExp(r'^(\d+) 个文件、(\d+) 个文件夹$'): '{1} files, {2} folders',
+  RegExp(r'^(\d+) 个$'): '{1}',
+  RegExp(r'^用 (.+) 打开$'): 'Open with {1}',
+  RegExp(r'^(.+)（默认）$'): '{1} (default)',
+  RegExp(r'^正在解压 (.+)$'): 'Extracting {1}',
+  RegExp(r'^(.+) 个文件 · (.+)$'): '{1} files · {2}',
+  RegExp(r'^解压完成：(.+)$'): 'Extracted to: {1}',
+  RegExp(r'^已复制 (\d+) 个项目$'): 'Copied {1} items',
+  RegExp(r'^已(?:传入|导入) (\d+) 个项目$'): 'Imported {1} items',
+  RegExp(r'^已移动 (\d+) 个项目$'): 'Moved {1} items',
+  RegExp(r'^拖拽 (\d+) 个项目$'): 'Dragging {1} items',
+  RegExp(r'^已用 (.+) 打开 · 修改检测已开启$'):
+      'Opened with {1} · Change monitoring enabled',
+  RegExp(r'^(.+) 文件$'): '{1} file',
+  RegExp(r'^当前格式只读。修改后的文件保留在 (.+)$'):
+      'Read-only archive. Modified file retained at: {1}',
+  RegExp(r'^保存失败：(.+)\n临时文件仍保留在 (.+)$', dotAll: true):
+      'Save failed: {1}\nTemporary file retained at: {2}',
+  RegExp(r'^设置失败：(.+)$', dotAll: true): 'Settings update failed: {1}',
+  RegExp(r'^系统预览失败：(.+)$', dotAll: true): 'Quick Look failed: {1}',
+  RegExp(r'^临时缓存清理失败，请重试关闭窗口：(.+)$', dotAll: true):
+      'Temporary cache cleanup failed. Try closing the window again: {1}',
+  RegExp(r'^无法识别文件名编码，请通过编码菜单选择：(.+)$', dotAll: true): 'Unable to detect filename encoding. Select it from the Encoding menu: {1}',
   RegExp(
     r'^“(.+)” 已修改，是否更新压缩包？\n\n选择“否”不会保存修改。关闭压缩包后，未保存的内容将丢失。$',
     dotAll: true,
-  ): (m) =>
-      '“${m[1]}” has changed. Update the archive?\n\nChoosing “No” leaves the changes unsaved. They will be lost when you close the archive.',
+  ): '“{1}” has changed. Update the archive?\n\nChoosing “No” leaves the changes unsaved. They will be lost when you close the archive.',
 };
 
-const _english = <String, String>{
+Iterable<String> get appMessageTemplates => _patterns.values;
+
+const _chineseTerminology = {
+  '正在传入文件': '正在导入文件',
+  '全部进度': '总体进度',
+  '种类': '类型',
+  '操作已完成': '操作完成',
+  '当前格式只支持读取。': '当前格式只读。',
+};
+
+const appEnglishMessages = <String, String>{
   '文件超过预览限制，请打开文件查看完整内容。':
       'File exceeds the preview limit. Open it to view the full content.',
   '新建文件夹': 'New Folder',
@@ -142,7 +179,7 @@ const _english = <String, String>{
   '返回': 'Back',
   '设置': 'Settings',
   '外观': 'Appearance',
-  '主题色': 'Accent color',
+  '主题色': 'Accent Color',
   '海蓝': 'Ocean Blue',
   '紫罗兰': 'Violet',
   '青绿': 'Teal',
@@ -201,13 +238,14 @@ const _english = <String, String>{
   '正在传输文件': 'Transferring files',
   '正在创建项目': 'Creating item',
   '正在删除项目': 'Deleting items',
-  '正在确认修改': 'Acknowledging changes',
+  '正在确认修改': 'Confirming changes',
   '正在保留临时文件': 'Retaining temporary file',
   '正在放弃修改': 'Discarding changes',
   '正在处理文件': 'Processing files',
   '压缩文件': 'Archives',
   'ZIP 已创建': 'ZIP created',
-  '已在默认应用中打开 · 修改检测已开启': 'Opened in the default app · Watching for changes',
+  '已在默认应用中打开 · 修改检测已开启':
+      'Opened in the default app · Change monitoring enabled',
   '解压到这里': 'Extract Here',
   '正在解压': 'Extracting',
   '文件已修改': 'File Modified',
@@ -235,6 +273,8 @@ const _english = <String, String>{
   '没有匹配的文件': 'No matching files',
   '空文件夹': 'Empty folder',
   '打开方式': 'Open With',
+  '在 HiZip 中打开': 'Open in HiZip',
+  '其他应用': 'Other Applications',
   '目录': 'Folders',
   '列表视图': 'List View',
   '图标视图': 'Icon View',
@@ -252,8 +292,8 @@ const _english = <String, String>{
   '搜索': 'Search',
   '名称': 'Name',
   '大小': 'Size',
-  '修改日期': 'Modified',
-  '种类': 'Kind',
+  '修改日期': 'Date Modified',
+  '种类': 'Type',
   '系统预览（空格）': 'Quick Look (Space)',
   '预览': 'Preview',
   '打开': 'Open',
@@ -295,4 +335,74 @@ const _english = <String, String>{
   '全部进度': 'Overall Progress',
   '正在处理…': 'Processing…',
   '语言设置保存失败，请重试。': 'Unable to save the language preference. Please try again.',
+  '操作信息': 'Operation Details',
+  '操作失败': 'Operation failed',
+  '操作完成': 'Operation complete',
+  '操作已完成': 'Operation complete',
+  '操作已取消': 'Operation cancelled',
+  '正在取消': 'Cancelling',
+  '取消任务': 'Cancel Task',
+  '关闭': 'Close',
+  '关闭窗口': 'Close Window',
+  '最小化': 'Minimize',
+  '最大化': 'Maximize',
+  '还原': 'Restore',
+  '拖动': 'Drag',
+  '撤销': 'Undo',
+  '重做': 'Redo',
+  '剪切': 'Cut',
+  '窗口': 'Window',
+  '缩放': 'Zoom',
+  '全部置于最前': 'Bring All to Front',
+  '帮助': 'Help',
+  '压缩包设置保存失败，请重试。': 'Unable to save archive settings. Please try again.',
+  '浏览习惯保存失败，请重试。': 'Unable to save browsing preferences. Please try again.',
+  '无法读取设置，当前使用自动线程数。':
+      'Unable to load settings. Automatic extraction threads are in use.',
+  '文件高亮设置保存失败，请重试。': 'Unable to save selection settings. Please try again.',
+  '外观设置保存失败，请重试。': 'Unable to save appearance settings. Please try again.',
+  'DPI 设置保存失败，请重试。': 'Unable to save interface scaling. Please try again.',
+  '设置保存失败，请重试。': 'Unable to save settings. Please try again.',
+  '浏览器版本需要 WebAssembly 引擎。请使用原生桌面版本。': 'The browser version requires a WebAssembly engine. Use the native desktop app.',
+  '画廊预览已取消': 'Gallery preview cancelled',
+  'zstd（单个文件）': 'zstd (single file)',
+  'LZ4（单个文件）': 'LZ4 (single file)',
+  'lzip（单个文件）': 'lzip (single file)',
+  'compress（单个文件）': 'compress (single file)',
+  'DOS（CP437）': 'DOS (CP437)',
+  '压缩包缓存正在关闭。': 'The archive cache is closing.',
+  '此路径存在重复条目，无法安全打开。':
+      'This path has duplicate entries and cannot be opened safely.',
+  '原压缩包已被其他程序修改。为避免覆盖，请保留临时文件并重新打开压缩包。': 'Another application modified the archive. Keep the temporary file and reopen the archive to avoid overwriting changes.',
+  '当前格式仅支持读取。请另存临时文件，或创建新的可写压缩包。': 'This format is read-only. Save the temporary file elsewhere or create a writable archive.',
+  '文件在保存过程中再次发生变化，请重试。':
+      'The file changed again while saving. Please try again.',
+  '当前格式只支持读取，文件传入和内部移动需要可写入的未加密压缩包。':
+      'Importing and moving files requires a writable, unencrypted archive.',
+  '不安全的目标目录。': 'The destination folder is unsafe.',
+  '压缩包在拖拽过程中已变化，请重试。': 'The archive changed during the drag. Please try again.',
+  '压缩包在传输过程中已被修改，请重试。':
+      'The archive changed during transfer. Please try again.',
+  '不能将目录放入它自身或子目录中。': 'A folder cannot be placed inside itself or a subfolder.',
+  '压缩包已变化，请重新打开后再试。': 'The archive changed. Reopen it and try again.',
+  '所选文件存在同名文件，请先重命名。':
+      'Selected files have duplicate names. Rename them first.',
+  '来源文件在传输过程中已变化，请重试。':
+      'The source file changed during transfer. Please try again.',
+  '此文件是链接、加密文件或包含不安全路径，暂不支持解压。':
+      'Links, encrypted files and unsafe paths cannot be extracted.',
+  '不安全的文件名。': 'The filename is unsafe.',
+  '来源文件夹包含重名或大小写冲突的路径。':
+      'The source folder contains duplicate or case-conflicting paths.',
+  '暂不支持传入链接或特殊文件。': 'Importing links or special files is not supported.',
+  '压缩包含有重复的文件路径，无法安全解压。': 'Duplicate paths prevent safe extraction.',
+  '所选条目存在同名文件。': 'The selected items have duplicate names.',
+  '不安全的目录路径。': 'The folder path is unsafe.',
+  '不能将目录移动到它自身或子目录中。': 'A folder cannot be moved into itself or a subfolder.',
+  '压缩包含有重复路径，无法安全修改。': 'Duplicate paths prevent safe archive modification.',
+  '目标路径不是文件夹。': 'The destination path is not a folder.',
+  '含有链接、加密或不安全条目的 ZIP 暂不支持修改。': 'ZIP archives with links, encrypted entries or unsafe paths cannot be modified.',
+  '不能将压缩包加入它自身。': 'An archive cannot be added to itself.',
+  '传入的文件夹包含当前压缩包，不能将压缩包加入它自身。': 'The imported folder contains this archive. An archive cannot be added to itself.',
+  '事件队列已关闭': 'The task queue is closed.',
 };

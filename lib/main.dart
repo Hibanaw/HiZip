@@ -43,9 +43,8 @@ class HiZipApp extends StatelessWidget {
           ? null
           : AppSettings.instance.locale,
 
-      supportedLocales: const [Locale('zh'), Locale('en')],
-      localeResolutionCallback: (locale, _) =>
-          Locale(locale?.languageCode == 'zh' ? 'zh' : 'en'),
+      supportedLocales: supportedAppLocales,
+      localeResolutionCallback: (locale, _) => resolveAppLocale(locale),
 
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       builder: (context, child) => AppLanguageScope(

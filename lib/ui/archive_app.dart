@@ -323,7 +323,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   void didChangeLocales(List<Locale>? locales) => applySettings();
 
   void applySettings() {
-    unawaited(desktop.setLanguage(settings.locale.languageCode));
+    final language = settings.locale.languageCode;
+    unawaited(
+      desktop.setLanguage(
+        language,
+        translations: {
+          for (final text in appEnglishMessages.keys)
+            text: translateAppText(text, language),
+        },
+        english: appEnglishMessages,
+      ),
+    );
     service.maxExtractionWorkers = settings.extractionWorkers;
     service.readEncoding = settings.archive.readEncoding;
     service.createEncoding = settings.archive.createEncoding;
@@ -1217,7 +1227,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   Widget remainingItems(String path, DirectoryListing listing) =>
       FileItemSurface(
         key: ValueKey('expand-remaining-$path'),
-        name: '双击展开剩余 ${listing.remainingCount} 项',
+        name: translateAppText(
+          '双击展开剩余 ${listing.remainingCount} 项',
+          settings.locale.languageCode,
+        ),
         selected: false,
         onSelect: null,
         onActivate: busy
@@ -1478,8 +1491,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     await run(() async {
       final result = await service.importFiles(doc, paths, destination);
       refreshDocument(result);
-      message('已传入 ${paths.length} 个项目');
-    }, title: '正在传入文件');
+      message('已导入 ${paths.length} 个项目');
+    }, title: '正在导入文件');
   }
 
   Future<String?> entryNameDialog(bool directory) async {
@@ -4140,7 +4153,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 selected!.directory ? '—' : formatSize(selected!.size),
               ),
               info('修改日期', date(selected!.modified)),
-              info('路径', selected!.normalized),
+              info('路径', selected!.normalized, literal: true),
             ],
           ),
           actions: selectionActions(),
@@ -4363,7 +4376,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           info('项目', '$itemCount 个'),
           info('当前层级', '${entries.length} 个'),
           info('大小', formatSize(totalSize)),
-          info('路径', archive ? document!.path : summaryFolder),
+          info('路径', archive ? document!.path : summaryFolder, literal: true),
           if (archive) info('状态', document!.writable ? '可写入' : '只读'),
         ],
       ),
@@ -4371,7 +4384,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget info(String label, String value) => Container(
+  Widget info(String label, String value, {bool literal = false}) => Container(
     decoration: BoxDecoration(
       border: Border(
         bottom: BorderSide(color: Theme.of(context).dividerColor, width: .5),
@@ -4560,8 +4573,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
-                                    child: AppText(
-                                      '${p.basename(task.archive)} · ${appText(context, task.title)}${task.cancelled ? ' · 正在取消' : ''}',
+                                    child: Text(
+                                      '${p.basename(task.archive)} · ${appText(context, task.title)}${task.cancelled ? ' · ${appText(context, '正在取消')}' : ''}',
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(fontSize: 12),
                                     ),
@@ -4570,7 +4583,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                     key: ValueKey(
                                       'cancel-task-${task.archive}-${task.title}',
                                     ),
-                                    tooltip: '取消任务',
+                                    tooltip: appText(context, '取消任务'),
                                     icon: const Icon(Icons.close, size: 16),
                                     padding: EdgeInsets.zero,
                                     constraints: const BoxConstraints.tightFor(

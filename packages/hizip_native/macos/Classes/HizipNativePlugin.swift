@@ -90,7 +90,17 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
   private var nameAlert: NSAlert?
 
   private var menuLanguage = "zh", menusConfigured = false
+  private var menuTranslations: [String: String] = [:]
+  private var menuSources: [String: String] = [:]
+  private func sourceTitle(_ text: String) -> String {
+    menuSources[text] ?? text
+  }
   private func localized(_ text: String) -> String {
+    let source = sourceTitle(text)
+    if let translated = menuTranslations[source] {
+      menuSources[translated] = source
+      return translated
+    }
     let titles = ["新建文件夹…": "New Folder…", "新建空白文档…": "New Blank Document…", "删除…": "Delete…", "名称": "Name", "创建": "Create", "取消": "Cancel", "设置…": "Settings…", "文件": "File", "打开…": "Open…", "最近打开": "Open Recent", "暂无最近打开的文件": "No Recent Files", "清除菜单": "Clear Menu", "创建 ZIP…": "Create ZIP…", "创建压缩包": "Create Archive", "解压…": "Extract…", "编码": "Encoding", "自动识别": "Auto Detect", "简体中文（GB18030 / GBK）": "Chinese Simplified (GB18030 / GBK)", "繁体中文（Big5）": "Chinese Traditional (Big5)", "日文（Shift-JIS）": "Japanese (Shift-JIS)", "韩文（CP949）": "Korean (CP949)", "西欧（Windows-1252）": "Western European (Windows-1252)", "关闭窗口": "Close Window", "关闭标签页": "Close Tab", "显示": "View", "列表视图": "List View", "图标视图": "Icon View", "多栏视图": "Column View", "画廊视图": "Gallery View", "预览栏": "Preview Pane", "编辑": "Edit", "撤销": "Undo", "重做": "Redo", "剪切": "Cut", "复制": "Copy", "粘贴": "Paste", "全选": "Select All", "窗口": "Window", "最小化": "Minimize", "缩放": "Zoom", "全部置于最前": "Bring All to Front", "帮助": "Help"]
     return menuLanguage == "en" ? (titles[text] ?? text) : (titles.first(where: { $0.value == text })?.key ?? text)
   }
@@ -176,7 +186,7 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
       settings.action = #selector(menuCommand(_:))
       settings.representedObject = "settings"
     }
-    if let old = main.items.first(where: { ["文件", "File"].contains($0.title) }) { main.removeItem(old) }
+    if let old = main.items.first(where: { sourceTitle($0.title) == "文件" || $0.title == "File" }) { main.removeItem(old) }
     let fileMenu = NSMenu(title: localized("文件"))
     fileMenu.addItem(menuItem("打开…", "open", key: "o"))
     let recent = NSMenuItem(title: localized("最近打开"), action: nil, keyEquivalent: "")
@@ -218,7 +228,7 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     let file = NSMenuItem(title: localized("文件"), action: nil, keyEquivalent: "")
     file.submenu = fileMenu
     main.insertItem(file, at: min(1, main.numberOfItems))
-    if let edit = main.items.first(where: { ["Edit", "编辑"].contains($0.title) })?.submenu {
+    if let edit = main.items.first(where: { sourceTitle($0.title) == "编辑" || $0.title == "Edit" })?.submenu {
       for item in edit.items {
         guard let action = item.action else { continue }
         let command = NSStringFromSelector(action).replacingOccurrences(of: ":", with: "")
@@ -229,7 +239,7 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
         }
       }
     }
-    if let viewItem = main.items.first(where: { $0.title == "View" || $0.title == "显示" }), let view = viewItem.submenu {
+    if let viewItem = main.items.first(where: { sourceTitle($0.title) == "显示" || $0.title == "View" }), let view = viewItem.submenu {
       viewItem.title = localized("显示")
       view.title = localized("显示")
       for command in [("列表视图", "list"), ("图标视图", "grid"), ("多栏视图", "columns"), ("画廊视图", "gallery"), ("预览栏", "inspector")] {
@@ -388,14 +398,20 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
       result(nil); return
     }
     if call.method == "language" {
-      let language = call.arguments as? String == "en" ? "en" : "zh"
+      let payload = call.arguments as? [String: Any]
+      let language = payload?["language"] as? String ?? call.arguments as? String ?? "zh"
+      if let english = payload?["english"] as? [String: String] {
+        for (source, title) in english { menuSources[title] = source }
+      }
+      menuTranslations = payload?["translations"] as? [String: String] ?? [:]
       if language != menuLanguage {
         menuLanguage = language
         if menusConfigured { configureMenus() }
       }
       for root in NSApp.mainMenu?.items ?? [] {
-        if ["Edit", "编辑", "Window", "窗口", "Help", "帮助"].contains(root.title) {
+        if ["编辑", "窗口", "帮助", "Edit", "Window", "Help"].contains(sourceTitle(root.title)) {
           root.title = localized(root.title)
+          root.submenu?.title = root.title
           for item in root.submenu?.items ?? [] { item.title = localized(item.title) }
         }
       }
