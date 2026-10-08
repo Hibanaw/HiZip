@@ -291,6 +291,36 @@ void main() {
     expect(find.byKey(const ValueKey('selection-strip')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('sidebar resize hit areas extend beyond the unchanged divider', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    for (final key in ['sidebar-resizer', 'inspector-resizer']) {
+      final handle = find.byKey(ValueKey(key));
+      final divider = find.byKey(ValueKey('$key-line'));
+      final direction = key == 'sidebar-resizer' ? 1.0 : -1.0;
+      expect(tester.getSize(handle).width, 13);
+      expect(tester.getSize(divider).width, 1);
+      expect(tester.getCenter(handle), tester.getCenter(divider));
+      for (final offset in [-5.0, 5.0]) {
+        final oldCenter = tester.getCenter(handle);
+        await tester.dragFrom(
+          oldCenter + Offset(offset, 0),
+          Offset(direction * 40, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          (tester.getCenter(handle).dx - oldCenter.dx) * direction,
+          greaterThan(10),
+        );
+        expect(tester.getSize(divider).width, 1);
+        expect(tester.getCenter(handle), tester.getCenter(divider));
+      }
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('multiple selections show a combined Finder-style summary', (
     tester,
   ) async {

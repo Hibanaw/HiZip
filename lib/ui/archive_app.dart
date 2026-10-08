@@ -2233,7 +2233,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               drawer: desktopLayout
                                   ? null
                                   : Drawer(width: 240, child: sidebar()),
-                              body: Row(
+                              body: splitterRow(
+                                resizerKey: 'sidebar-resizer',
+                                enabled: desktopLayout,
+                                boundaryWidth: leftWidth,
+                                resize: (dx) =>
+                                    sidebarWidth = (leftWidth + dx).clamp(
+                                      160.0,
+                                      (constraints.maxWidth * .28).clamp(
+                                        160.0,
+                                        double.infinity,
+                                      ),
+                                    ),
                                 children: [
                                   if (desktopLayout)
                                     SizedBox(
@@ -2241,23 +2252,26 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                       child: sidebar(),
                                     ),
                                   if (desktopLayout)
-                                    splitter(
-                                      'sidebar-resizer',
-                                      (dx) =>
-                                          sidebarWidth = (leftWidth + dx).clamp(
-                                            160.0,
-                                            (constraints.maxWidth * .28).clamp(
-                                              160.0,
-                                              double.infinity,
-                                            ),
-                                          ),
-                                    ),
+                                    splitterLine('sidebar-resizer'),
                                   Expanded(
                                     child: Column(
                                       children: [
                                         if (tabs.length > 1) archiveTabs(),
                                         Expanded(
-                                          child: Row(
+                                          child: splitterRow(
+                                            resizerKey: 'inspector-resizer',
+                                            enabled: inspectorVisible,
+                                            boundaryWidth: rightWidth,
+                                            trailing: true,
+                                            resize: (dx) => inspectorWidth =
+                                                (rightWidth - dx).clamp(
+                                                  220.0,
+                                                  (constraints.maxWidth * .32)
+                                                      .clamp(
+                                                        220.0,
+                                                        double.infinity,
+                                                      ),
+                                                ),
                                             children: [
                                               Expanded(
                                                 child: directoryBackground(
@@ -2297,18 +2311,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                                 ),
                                               ),
                                               if (inspectorVisible) ...[
-                                                splitter(
+                                                splitterLine(
                                                   'inspector-resizer',
-                                                  (dx) => inspectorWidth =
-                                                      (rightWidth - dx).clamp(
-                                                        220.0,
-                                                        (constraints.maxWidth *
-                                                                .32)
-                                                            .clamp(
-                                                              220.0,
-                                                              double.infinity,
-                                                            ),
-                                                      ),
                                                 ),
                                                 SizedBox(
                                                   width: rightWidth,
@@ -2339,6 +2343,35 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
+  Widget splitterLine(String key) => Container(
+    key: ValueKey('$key-line'),
+    width: 1,
+    color: desktopColor(context, 0xffd8d8d8, 0xff414248),
+  );
+
+  Widget splitterRow({
+    required String resizerKey,
+    required bool enabled,
+    required double boundaryWidth,
+    required void Function(double) resize,
+    required List<Widget> children,
+    bool trailing = false,
+  }) => Stack(
+    fit: StackFit.expand,
+    children: [
+      Row(children: children),
+      if (enabled)
+        Positioned(
+          left: trailing ? null : boundaryWidth - 6,
+          right: trailing ? boundaryWidth - 6 : null,
+          top: 0,
+          bottom: 0,
+          width: 13,
+          child: splitter(resizerKey, resize),
+        ),
+    ],
+  );
+
   Widget splitter(String key, void Function(double) resize) => MouseRegion(
     cursor: SystemMouseCursors.resizeColumn,
     child: GestureDetector(
@@ -2349,10 +2382,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         setState(() => resize(event.delta.dx));
         saveBrowsingPreferences();
       },
-      child: Container(
-        width: 1,
-        color: desktopColor(context, 0xffd8d8d8, 0xff414248),
-      ),
+      child: const SizedBox.expand(),
     ),
   );
 
@@ -4433,8 +4463,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           ),
         ),
         Expanded(
-          child: AppText(
-            value,
+          child: Text(
+            literal
+                ? value
+                : translateAppText(value, settings.locale.languageCode),
             textAlign: TextAlign.right,
             style: const TextStyle(fontSize: 11, height: 1.5),
           ),
