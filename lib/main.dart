@@ -32,8 +32,11 @@ class HiZipApp extends StatelessWidget {
     builder: (_, _) => MaterialApp(
       title: 'HiZip',
       debugShowCheckedModeBanner: false,
-      theme: desktopTheme(),
-      darkTheme: desktopTheme(brightness: Brightness.dark),
+      theme: desktopTheme(accent: AppSettings.instance.accent),
+      darkTheme: desktopTheme(
+        brightness: Brightness.dark,
+        accent: AppSettings.instance.accent,
+      ),
       themeMode: AppSettings.instance.themeMode,
 
       locale: AppSettings.instance.language == AppLanguage.system

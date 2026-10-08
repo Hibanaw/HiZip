@@ -8,7 +8,7 @@ import 'package:forui/forui.dart';
 
 import '../services/app_settings.dart';
 import '../services/desktop_integration.dart';
-import '../models/selection_highlight.dart';
+import '../models/theme_accent.dart';
 import '../models/archive_preferences.dart';
 import 'desktop_widgets.dart';
 import 'window_chrome.dart';
@@ -171,7 +171,13 @@ class _SettingsPageState extends State<SettingsPage>
                       child: Align(
                         alignment: Alignment.topLeft,
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 560),
+                          constraints: BoxConstraints(
+                            minWidth: (constraints.maxWidth - 40).clamp(
+                              0.0,
+                              560.0,
+                            ),
+                            maxWidth: 560,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -238,7 +244,7 @@ class _SettingsPageState extends State<SettingsPage>
                                 ),
                                 const SizedBox(height: 24),
                                 const AppText(
-                                  '文件选择高亮',
+                                  '主题色',
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -249,27 +255,35 @@ class _SettingsPageState extends State<SettingsPage>
                                   spacing: 8,
                                   runSpacing: 8,
                                   children: [
-                                    for (final value
-                                        in SelectionHighlight.values)
+                                    for (final value in ThemeAccent.values)
                                       DesktopButton(
-                                        active:
-                                            settings.selectionHighlight ==
-                                            value,
+                                        active: settings.accent == value,
                                         onPressed: settings.saving
                                             ? null
-                                            : () => settings
-                                                  .setSelectionHighlight(value),
-                                        child: AppText(
-                                          value == SelectionHighlight.blue
-                                              ? '蓝色'
-                                              : '淡灰色',
+                                            : () => settings.setAccent(value),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            DecoratedBox(
+                                              decoration: BoxDecoration(
+                                                color: value.color,
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const SizedBox(
+                                                width: 14,
+                                                height: 14,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            AppText(value.label),
+                                          ],
                                         ),
                                       ),
                                   ],
                                 ),
                                 const SizedBox(height: 12),
                                 AppText(
-                                  '多栏视图仅最右侧列使用此高亮，左侧路径列使用灰色。',
+                                  '主题色用于主要按钮、文件选择和交互高亮，立即生效。',
                                   style: TextStyle(
                                     fontSize: 12,
                                     height: 1.6,

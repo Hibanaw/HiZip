@@ -28,6 +28,7 @@ const _host = MethodChannel('dev.hizip/task-window-host');
 Map<String, dynamic> _taskPayload(TaskFeedback data) => {
   ...data.toJson(),
   'themeMode': AppSettings.instance.themeMode.name,
+  'accent': AppSettings.instance.accent.name,
   'language': AppSettings.instance.language.name,
 };
 
@@ -47,7 +48,30 @@ Future<Widget?> initializeTaskWindows() async {
         return true;
       }
       if (call.method == 'settingsChanged') {
+        final values = call.arguments;
+        String? accent;
+        String? themeMode;
+        String? language;
+        if (values is Map) {
+          accent = values['accent'] as String?;
+          themeMode = values['themeMode'] as String?;
+          language = values['language'] as String?;
+          if (accent != null) AppSettings.instance.synchronizeAccent(accent);
+          if (themeMode != null) {
+            AppSettings.instance.synchronizeTheme(themeMode);
+          }
+          if (language != null) {
+            AppSettings.instance.synchronizeLanguage(language);
+          }
+        }
         await _settingsChanged?.call();
+        if (accent != null) AppSettings.instance.synchronizeAccent(accent);
+        if (themeMode != null) {
+          AppSettings.instance.synchronizeTheme(themeMode);
+        }
+        if (language != null) {
+          AppSettings.instance.synchronizeLanguage(language);
+        }
         return true;
       }
       throw MissingPluginException(call.method);
@@ -62,7 +86,16 @@ Future<Widget?> initializeTaskWindows() async {
     final settings = AppSettings.instance;
     final parent = WindowController.fromWindowId(args['parent'] as String);
     settings.addListener(() {
-      if (!settings.saving) unawaited(parent.invokeMethod('settingsChanged'));
+      if (!settings.saving) {
+        unawaited(
+          parent.invokeMethod('settingsChanged', {
+            'accent': settings.accent.name,
+            'themeMode': settings.themeMode.name,
+            'language': settings.language.name,
+            'dpiScale': settings.dpiScale,
+          }),
+        );
+      }
     });
     setTaskWindowCloseAction(() => unawaited(current.hide()));
     configureSettingsWindow();
@@ -77,8 +110,11 @@ Future<Widget?> initializeTaskWindows() async {
       listenable: settings,
       builder: (_, _) => MaterialApp(
         debugShowCheckedModeBanner: false,
-        theme: desktopTheme(),
-        darkTheme: desktopTheme(brightness: Brightness.dark),
+        theme: desktopTheme(accent: settings.accent),
+        darkTheme: desktopTheme(
+          brightness: Brightness.dark,
+          accent: settings.accent,
+        ),
         themeMode: settings.themeMode,
 
         locale: settings.language == AppLanguage.system
@@ -127,6 +163,9 @@ Future<Widget?> initializeTaskWindows() async {
   await current.setWindowMethodHandler((call) async {
     if (call.method == 'update') {
       final payload = Map<String, dynamic>.from(call.arguments as Map);
+      AppSettings.instance.synchronizeAccent(
+        payload['accent'] as String? ?? 'blue',
+      );
       AppSettings.instance.synchronizeTheme(
         payload['themeMode'] as String? ?? 'system',
       );
@@ -264,8 +303,11 @@ class _TaskWindowApp extends StatelessWidget {
     listenable: AppSettings.instance,
     builder: (_, _) => MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: desktopTheme(),
-      darkTheme: desktopTheme(brightness: Brightness.dark),
+      theme: desktopTheme(accent: AppSettings.instance.accent),
+      darkTheme: desktopTheme(
+        brightness: Brightness.dark,
+        accent: AppSettings.instance.accent,
+      ),
       themeMode: AppSettings.instance.themeMode,
 
       locale: AppSettings.instance.language == AppLanguage.system

@@ -8,6 +8,7 @@ import '../models/browsing_preferences.dart';
 import '../models/archive_preferences.dart';
 import '../models/app_language.dart';
 import '../models/selection_highlight.dart';
+import '../models/theme_accent.dart';
 
 class AppSettings extends ChangeNotifier {
   AppSettings({
@@ -17,6 +18,8 @@ class AppSettings extends ChangeNotifier {
     Future<void> Function(String)? writeLanguage,
     Future<String?> Function()? readTheme,
     Future<void> Function(String)? writeTheme,
+    Future<String?> Function()? readAccent,
+    Future<void> Function(String)? writeAccent,
     Future<String?> Function()? readDpiScale,
     Future<void> Function(String)? writeDpiScale,
     Future<String?> Function()? readHighlight,
@@ -25,7 +28,14 @@ class AppSettings extends ChangeNotifier {
     Future<void> Function(String)? writeArchive,
     Future<String?> Function()? readBrowsing,
     Future<void> Function(String)? writeBrowsing,
-  }) : _readLanguage =
+  }) : _readAccent =
+           readAccent ??
+           (() => SharedPreferencesAsync().getString('appearance.accent')),
+       _writeAccent =
+           writeAccent ??
+           ((value) =>
+               SharedPreferencesAsync().setString('appearance.accent', value)),
+       _readLanguage =
            readLanguage ??
            (() => SharedPreferencesAsync().getString('appearance.language')),
        _writeLanguage =
@@ -56,8 +66,10 @@ class AppSettings extends ChangeNotifier {
            (() => SharedPreferencesAsync().getString('appearance.dpiScale')),
        _writeDpiScale =
            writeDpiScale ??
-           ((value) =>
-               SharedPreferencesAsync().setString('appearance.dpiScale', value)),
+           ((value) => SharedPreferencesAsync().setString(
+             'appearance.dpiScale',
+             value,
+           )),
        _readHighlight =
            readHighlight ??
            (() => SharedPreferencesAsync().getString(
@@ -131,6 +143,37 @@ class AppSettings extends ChangeNotifier {
   }
 
   static final instance = AppSettings();
+  final Future<String?> Function() _readAccent;
+  final Future<void> Function(String) _writeAccent;
+  ThemeAccent accent = ThemeAccent.blue;
+
+  void synchronizeAccent(String value) {
+    final next = ThemeAccent.values.firstWhere(
+      (accent) => accent.name == value,
+      orElse: () => ThemeAccent.blue,
+    );
+    if (accent == next) return;
+    accent = next;
+    notifyListeners();
+  }
+
+  Future<void> setAccent(ThemeAccent value) async {
+    if (saving || value == accent) return;
+    saving = true;
+    error = null;
+    notifyListeners();
+    try {
+      await _writeAccent(value.name);
+      accent = value;
+      selectionHighlight = SelectionHighlight.blue;
+    } catch (_) {
+      error = '主题色保存失败，请重试。';
+    } finally {
+      saving = false;
+      notifyListeners();
+    }
+  }
+
   static const _key = 'performance.extractionWorkers';
   final Future<int?> Function() _read;
   final Future<void> Function(int) _write;
@@ -190,6 +233,13 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> load() async {
     try {
+      final stored = await _readAccent();
+      accent = ThemeAccent.values.firstWhere(
+        (value) => value.name == stored,
+        orElse: () => ThemeAccent.blue,
+      );
+    } catch (_) {}
+    try {
       final stored = await _readLanguage();
       language = AppLanguage.values.firstWhere(
         (value) => value.name == stored,
@@ -216,6 +266,9 @@ class AppSettings extends ChangeNotifier {
         (value) => value.name == highlight,
         orElse: () => SelectionHighlight.blue,
       );
+      if (highlight == SelectionHighlight.neutral.name) {
+        selectionHighlight = SelectionHighlight.blue;
+      }
     } catch (_) {
       /* Preserve appearance if storage is unavailable. */
     }
@@ -252,11 +305,11 @@ class AppSettings extends ChangeNotifier {
       } catch (_) {
         /* Default DPI when preferences are unavailable. */
       }
-      notifyListeners();
     } catch (_) {
       // A preference read failure must not prevent opening archives.
       error = '无法读取设置，当前使用自动线程数。';
     }
+    notifyListeners();
   }
 
   Future<void> setSelectionHighlight(SelectionHighlight value) async {

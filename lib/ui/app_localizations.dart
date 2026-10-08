@@ -72,6 +72,8 @@ class AppText extends StatelessWidget {
 }
 
 final _patterns = <RegExp, String Function(RegExpMatch)>{
+  RegExp(r'^双击展开剩余 (\d+) 项$'): (m) =>
+      'Double-click to show ${m[1]} remaining items',
   RegExp(r'^队列 \((\d+)\)$'): (m) => 'Queue (${m[1]})',
   RegExp(r'^已删除 (\d+) 个项目$'): (m) => 'Deleted ${m[1]} items',
   RegExp(r'^(\d+) 个所选项目将从压缩包中删除，文件夹内的内容也会删除。$'): (m) =>
@@ -136,11 +138,19 @@ const _english = <String, String>{
   '语言': 'Language',
   '简体中文': '简体中文',
   '跟随系统': 'Follow System',
-  '语言设置自动保存，立即生效。':
-      'Your language preference is saved automatically and applies immediately.',
+  '语言设置自动保存，立即生效。': 'Your language preference is saved automatically and applies immediately.',
   '返回': 'Back',
   '设置': 'Settings',
   '外观': 'Appearance',
+  '主题色': 'Accent color',
+  '海蓝': 'Ocean Blue',
+  '紫罗兰': 'Violet',
+  '青绿': 'Teal',
+  '森林绿': 'Forest Green',
+  '琥珀橙': 'Amber Orange',
+  '玫瑰红': 'Rose',
+  '主题色用于主要按钮、文件选择和交互高亮，立即生效。': 'Applies immediately to primary buttons, file selections and interactive highlights.',
+  '主题色保存失败，请重试。': 'Could not save the accent color. Try again.',
   '浅色': 'Light',
   '深色': 'Dark',
   '文件选择高亮': 'File selection highlight',
@@ -150,20 +160,15 @@ const _english = <String, String>{
       'Only the rightmost column uses this highlight. Path columns use gray.',
   '压缩包': 'Archives',
   '读取默认文件名编码': 'Default filename encoding for reading',
-  '自动识别优先使用压缩包声明的编码。文件名乱码时，可在“文件 → 编码”中切换当前压缩包的编码。':
-      'Auto detection honors the archive’s encoding. If filenames look incorrect, choose another encoding under File → Encoding.',
+  '自动识别优先使用压缩包声明的编码。文件名乱码时，可在“文件 → 编码”中切换当前压缩包的编码。': 'Auto detection honors the archive’s encoding. If filenames look incorrect, choose another encoding under File → Encoding.',
   '创建 ZIP 的文件名编码': 'Filename encoding for new ZIP archives',
-  '建议使用 UTF-8。此设置用于新建 ZIP，不改变文件内容的编码。':
-      'UTF-8 is recommended. This applies to new ZIP filenames and does not change file contents.',
-  '0 不压缩，1 更快，9 压缩率更高。设置自动保存，下次创建时生效。':
-      '0 stores without compression, 1 is faster, and 9 compresses more. Applies to the next archive you create.',
+  '建议使用 UTF-8。此设置用于新建 ZIP，不改变文件内容的编码。': 'UTF-8 is recommended. This applies to new ZIP filenames and does not change file contents.',
+  '0 不压缩，1 更快，9 压缩率更高。设置自动保存，下次创建时生效。': '0 stores without compression, 1 is faster, and 9 compresses more. Applies to the next archive you create.',
   '性能': 'Performance',
   '解压线程数': 'Extraction threads',
   '自动': 'Automatic',
-  '自动根据处理器数量分配，最多使用 4 个线程。更多线程适合包含多个大文件的 ZIP；减少线程可降低 CPU 和磁盘占用。':
-      'Automatic uses up to 4 threads based on your processor. More threads help with large ZIP files; fewer reduce CPU and disk usage.',
-  '自动模式下，小压缩包使用单线程。单文件及不适合并行解压的格式使用顺序读取。设置自动保存，下次解压时生效。':
-      'Small archives and formats that cannot be extracted in parallel use one thread. Changes apply to the next extraction.',
+  '自动根据处理器数量分配，最多使用 4 个线程。更多线程适合包含多个大文件的 ZIP；减少线程可降低 CPU 和磁盘占用。': 'Automatic uses up to 4 threads based on your processor. More threads help with large ZIP files; fewer reduce CPU and disk usage.',
+  '自动模式下，小压缩包使用单线程。单文件及不适合并行解压的格式使用顺序读取。设置自动保存，下次解压时生效。': 'Small archives and formats that cannot be extracted in parallel use one thread. Changes apply to the next extraction.',
   '自动识别': 'Auto Detect',
   '简体中文（GB18030 / GBK）': 'Chinese Simplified (GB18030 / GBK)',
   '繁体中文（Big5）': 'Chinese Traditional (Big5)',
@@ -181,8 +186,7 @@ const _english = <String, String>{
   'bzip2（单个文件）': 'bzip2 (single file)',
   'xz（单个文件）': 'xz (single file)',
   'LZMA（单个文件）': 'LZMA (single file)',
-  '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。':
-      'Choose HiZip in the system Open With menu. The button below makes HiZip the default app for supported archive formats.',
+  '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。': 'Choose HiZip in the system Open With menu. The button below makes HiZip the default app for supported archive formats.',
   '关闭标签页': 'Close Tab',
   '未打开压缩包': 'No archive open',
   '队列为空': 'Queue is empty',
