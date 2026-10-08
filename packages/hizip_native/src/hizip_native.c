@@ -42,6 +42,14 @@ typedef struct stat hz_stat_t;
 static int read_open(struct archive *a, const char *s) { return archive_read_open_filename(a, s, 65536); }
 static int write_open(struct archive *a, const char *s) { return archive_write_open_filename(a, s); }
 #endif
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#elif defined(__linux__) || defined(__ANDROID__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 typedef struct { char *s; size_t n, cap; } buffer;
 static void append(buffer *b, const char *fmt, ...) {
@@ -79,6 +87,16 @@ HZ_EXPORT void hz_configure_encoding(const char *read, const char *write, int le
   snprintf(write_charset, sizeof(write_charset), "%s", write ? write : "UTF-8");
   compression_level = level >= 0 && level <= 9 ? level : 6;
 }
+HZ_EXPORT void hz_prepare_worker(void) {
+#ifdef _WIN32
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#elif defined(__linux__) || defined(__ANDROID__)
+  const pid_t thread_id = (pid_t)syscall(SYS_gettid);
+  setpriority(PRIO_PROCESS, thread_id, 5);
+#endif
+}
 static int suffix(const char *path, const char *ending) {
   size_t a = strlen(path), b = strlen(ending);
   if (a < b) return 0;
@@ -92,9 +110,14 @@ static int suffix(const char *path, const char *ending) {
 static int writable_format(int format, int filter) {
   int base = format & ARCHIVE_FORMAT_BASE_MASK;
   return (base == ARCHIVE_FORMAT_ZIP || base == ARCHIVE_FORMAT_7ZIP ||
-    base == ARCHIVE_FORMAT_TAR || base == ARCHIVE_FORMAT_CPIO || base == ARCHIVE_FORMAT_RAW) &&
+    base == ARCHIVE_FORMAT_TAR || base == ARCHIVE_FORMAT_CPIO ||
+    base == ARCHIVE_FORMAT_AR ||
+    base == ARCHIVE_FORMAT_RAW) &&
     (filter == ARCHIVE_FILTER_NONE || filter == ARCHIVE_FILTER_GZIP ||
-      filter == ARCHIVE_FILTER_BZIP2 || filter == ARCHIVE_FILTER_XZ || filter == ARCHIVE_FILTER_LZMA);
+      filter == ARCHIVE_FILTER_BZIP2 || filter == ARCHIVE_FILTER_XZ ||
+      filter == ARCHIVE_FILTER_LZMA || filter == ARCHIVE_FILTER_COMPRESS ||
+      filter == ARCHIVE_FILTER_LZIP || filter == ARCHIVE_FILTER_LZ4 ||
+      filter == ARCHIVE_FILTER_ZSTD);
 }
 static int configure_writer(struct archive *w, int format, int filter, const char *charset) {
   int rc;
@@ -103,6 +126,8 @@ static int configure_writer(struct archive *w, int format, int filter, const cha
     case ARCHIVE_FORMAT_7ZIP: rc = archive_write_set_format_7zip(w); break;
     case ARCHIVE_FORMAT_TAR: rc = archive_write_set_format_pax_restricted(w); break;
     case ARCHIVE_FORMAT_CPIO: rc = archive_write_set_format_cpio_newc(w); break;
+    case ARCHIVE_FORMAT_AR: rc = archive_write_set_format_ar_svr4(w); break;
+    case ARCHIVE_FORMAT_XAR: rc = archive_write_set_format_xar(w); break;
     case ARCHIVE_FORMAT_RAW: rc = archive_write_set_format_raw(w); break;
     default: return ARCHIVE_FATAL;
   }
@@ -123,6 +148,10 @@ static int configure_writer(struct archive *w, int format, int filter, const cha
     case ARCHIVE_FILTER_BZIP2: return archive_write_add_filter_bzip2(w);
     case ARCHIVE_FILTER_XZ: return archive_write_add_filter_xz(w);
     case ARCHIVE_FILTER_LZMA: return archive_write_add_filter_lzma(w);
+    case ARCHIVE_FILTER_COMPRESS: return archive_write_add_filter_compress(w);
+    case ARCHIVE_FILTER_LZIP: return archive_write_add_filter_lzip(w);
+    case ARCHIVE_FILTER_LZ4: return archive_write_add_filter_lz4(w);
+    case ARCHIVE_FILTER_ZSTD: return archive_write_add_filter_zstd(w);
     default: return ARCHIVE_FATAL;
   }
 }
@@ -130,22 +159,59 @@ static int format_for_filename(const char *path, int *filter) {
   *filter = ARCHIVE_FILTER_NONE;
   if (suffix(path, ".zip")) return ARCHIVE_FORMAT_ZIP;
   if (suffix(path, ".7z")) return ARCHIVE_FORMAT_7ZIP;
+  if (suffix(path, ".ar") || suffix(path, ".a")) return ARCHIVE_FORMAT_AR;
+  if (suffix(path, ".xar")) return ARCHIVE_FORMAT_XAR;
   if (suffix(path, ".cpio")) return ARCHIVE_FORMAT_CPIO;
   if (suffix(path, ".tar")) return ARCHIVE_FORMAT_TAR;
-  if (suffix(path, ".gz") || suffix(path, ".tgz")) *filter = ARCHIVE_FILTER_GZIP;
+  if (suffix(path, ".tar.gz") || suffix(path, ".tgz")) {
+    *filter = ARCHIVE_FILTER_GZIP;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.bz2") || suffix(path, ".tbz") || suffix(path, ".tbz2")) {
+    *filter = ARCHIVE_FILTER_BZIP2;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.xz") || suffix(path, ".txz")) {
+    *filter = ARCHIVE_FILTER_XZ;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lzma") || suffix(path, ".tlz")) {
+    *filter = ARCHIVE_FILTER_LZMA;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.zst") || suffix(path, ".tzst")) {
+    *filter = ARCHIVE_FILTER_ZSTD;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lz4") || suffix(path, ".tlz4")) {
+    *filter = ARCHIVE_FILTER_LZ4;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lzip") || suffix(path, ".tlzip")) {
+    *filter = ARCHIVE_FILTER_LZIP;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.z")) {
+    *filter = ARCHIVE_FILTER_COMPRESS;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".gz")) *filter = ARCHIVE_FILTER_GZIP;
   else if (suffix(path, ".bz2") || suffix(path, ".tbz") || suffix(path, ".tbz2")) *filter = ARCHIVE_FILTER_BZIP2;
   else if (suffix(path, ".xz") || suffix(path, ".txz")) *filter = ARCHIVE_FILTER_XZ;
   else if (suffix(path, ".lzma") || suffix(path, ".tlz")) *filter = ARCHIVE_FILTER_LZMA;
+  else if (suffix(path, ".zst")) *filter = ARCHIVE_FILTER_ZSTD;
+  else if (suffix(path, ".lz4")) *filter = ARCHIVE_FILTER_LZ4;
+  else if (suffix(path, ".lzip") || suffix(path, ".lz")) *filter = ARCHIVE_FILTER_LZIP;
+  else if (suffix(path, ".z")) *filter = ARCHIVE_FILTER_COMPRESS;
   else return 0;
-  if (suffix(path, ".tar.gz") || suffix(path, ".tgz") || suffix(path, ".tar.bz2") ||
-      suffix(path, ".tbz") || suffix(path, ".tbz2") || suffix(path, ".tar.xz") ||
-      suffix(path, ".txz") || suffix(path, ".tar.lzma") || suffix(path, ".tlz")) return ARCHIVE_FORMAT_TAR;
   return ARCHIVE_FORMAT_RAW;
 }
 static struct archive *reader(const char *path) {
   struct archive *a = archive_read_new();
   archive_read_support_filter_all(a); archive_read_support_format_all(a);
-  int filter; if (format_for_filename(path, &filter) == ARCHIVE_FORMAT_RAW || suffix(path, ".z") || suffix(path, ".zst") || suffix(path, ".lz4") || suffix(path, ".lz")) archive_read_support_format_raw(a);
+  int filter; if (format_for_filename(path, &filter) == ARCHIVE_FORMAT_RAW ||
+      suffix(path, ".z") || suffix(path, ".zst") || suffix(path, ".lz4") ||
+      suffix(path, ".lz") || suffix(path, ".lzip")) archive_read_support_format_raw(a);
   if (*read_charset && archive_read_set_format_option(a, NULL, "hdrcharset", read_charset) != ARCHIVE_OK) return a;
   if (read_open(a, path) != ARCHIVE_OK) { return a; }
   return a;
@@ -176,11 +242,11 @@ static int safe_name(const char *s) {
   return 1;
 }
 static char *list_impl(const char *path) {
-  struct archive *a = reader(path); struct archive_entry *e; buffer b = {0}; int rc, count = 0, safe_to_write = 1;
+  struct archive *a = reader(path); struct archive_entry *e; buffer b = {0}; int rc, first = 1, safe_to_write = 1;
   append(&b, "{\"entries\":[");
   while ((rc = next_header(a, &e, path)) == ARCHIVE_OK) {
-    if (++count > 100000) { free(b.s); archive_read_free(a); return error("Archive contains more than 100,000 entries"); }
-    if (count > 1) append(&b, ",");
+    if (!first) append(&b, ",");
+    first = 0;
     const char *name = entry_name(e);
     if (!name || strlen(name) > 4096) { free(b.s); archive_read_free(a); return error("Invalid or excessively long entry path"); }
     if (!safe_name(name) || archive_entry_is_encrypted(e) != 0 || archive_entry_hardlink(e) ||
@@ -242,7 +308,7 @@ static int target_compare(const void *left, const void *right) {
 }
 static char *extract_batch_impl(const char *path, const char **names, const char **outputs,
     const int64_t *limits, int count, int64_t total_limit, hz_extract_progress progress, hz_extract_detailed_progress detailed) {
-  if (count < 0 || count > 100000 || total_limit < 0) return error("Invalid extraction batch");
+  if (count < 0 || total_limit < 0) return error("Invalid extraction batch");
   if (!count) return ok();
   extract_target *targets = calloc((size_t)count, sizeof(*targets));
   if (!targets) return error("Cannot allocate extraction batch");
@@ -380,7 +446,7 @@ static char *update_impl(const char *path, const char *output, const char **path
     const char **names, int count, const char **removed, int remove_count) {
   hz_stat_t existing;
   if (!strcmp(path, output) || !hz_stat(output, &existing)) return error("Output must be a new separate file");
-  if (count < 0 || count > 100000 || remove_count < 0 || remove_count > 100000) return error("Invalid batch size");
+  if (count < 0 || remove_count < 0) return error("Invalid batch size");
   const char **sorted = malloc((size_t)(count ? count : 1) * sizeof(char *));
   const char **removed_sorted = malloc((size_t)(remove_count ? remove_count : 1) * sizeof(char *));
   if (!sorted || !removed_sorted) { free(sorted); free(removed_sorted); return error("Out of memory"); }

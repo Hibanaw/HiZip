@@ -13,9 +13,17 @@ const readableArchiveExtensions = [
   'tbz2',
   'txz',
   'tlz',
+  'tar.zst',
+  'tzst',
+  'tar.lz4',
+  'tlz4',
+  'tar.lzip',
+  'tlzip',
+  'tar.Z',
   'z',
   'zst',
   'lz4',
+  'lzip',
   'lz',
   'cpio',
   'cab',
@@ -33,6 +41,13 @@ const readableArchiveExtensions = [
   'epub',
 ];
 
+bool isReadableArchivePath(String path) {
+  final lowerPath = path.toLowerCase();
+  return readableArchiveExtensions.any(
+    (extension) => lowerPath.endsWith('.${extension.toLowerCase()}'),
+  );
+}
+
 const readableArchiveMimeTypes = [
   'application/zip',
   'application/x-7z-compressed',
@@ -49,10 +64,13 @@ const readableArchiveMimeTypes = [
   'application/x-xz-compressed-tar',
   'application/x-lzma',
   'application/x-lzip',
+  'application/x-zstd-compressed-tar',
+  'application/x-lz4-compressed-tar',
   'application/x-lzip-compressed-tar',
   'application/zstd',
   'application/x-zstd',
   'application/x-lz4',
+  'application/x-lzip',
   'application/x-cpio',
   'application/vnd.ms-cab-compressed',
   'application/x-iso9660-image',
@@ -75,9 +93,18 @@ const writableArchiveFormats = <String, String>{
   'tar.bz2': 'TAR + bzip2',
   'tar.xz': 'TAR + xz',
   'tar.lzma': 'TAR + LZMA',
+  'tar.zst': 'TAR + zstd',
+  'tar.lz4': 'TAR + LZ4',
+  'tar.lzip': 'TAR + lzip',
+  'tar.Z': 'TAR + compress',
   'cpio': 'CPIO',
+  'ar': 'ar archive',
   'gz': 'gzip（单个文件）',
   'bz2': 'bzip2（单个文件）',
   'xz': 'xz（单个文件）',
   'lzma': 'LZMA（单个文件）',
+  'zst': 'zstd（单个文件）',
+  'lz4': 'LZ4（单个文件）',
+  'lzip': 'lzip（单个文件）',
+  'Z': 'compress（单个文件）',
 };

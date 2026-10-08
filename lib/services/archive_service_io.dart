@@ -59,7 +59,8 @@ class _ArchiveCache {
 class ArchiveService {
   ArchiveService({this.temporaryRoot, this.maxExtractionWorkers});
 
-  /// Optional cap for benchmarks and low-resource hosts; auto defaults to four.
+  /// Optional cap for benchmarks and low-resource hosts; auto reserves CPU for
+  /// the UI and native window event loops.
   int? maxExtractionWorkers;
   String readEncoding = 'auto', createEncoding = 'UTF-8';
   int compressionLevel = 6;
@@ -802,7 +803,6 @@ Future<(List<String>, List<String>)> _scanInputFiles(
     }
     paths.add(path);
     targets.add(type == FileSystemEntityType.directory ? '$name/' : name);
-    if (paths.length > 100000) throw StateError('单次传输条目数超过上限。');
     if (type == FileSystemEntityType.directory) {
       await for (final child in Directory(path).list(followLinks: false)) {
         await add(child.path, '$name/${p.basename(child.path)}');
@@ -871,7 +871,7 @@ Future<(String, int)> _extractArchive(
       selected,
       format: doc.format,
       processors: Platform.numberOfProcessors,
-      maxWorkers: maxWorkers,
+      maxWorkers: maxWorkers ?? (Platform.numberOfProcessors > 2 ? 2 : 1),
     );
     final events = ReceivePort();
     final completed = List<int>.filled(batches.length, 0);
@@ -1075,9 +1075,6 @@ Future<_ImportPlan> _prepareImport(
   final (paths, targets) = await _scanInputFiles(sources, names);
   if (paths.any((path) => p.equals(p.absolute(path), p.absolute(doc.path)))) {
     throw StateError('传入的文件夹包含当前压缩包，不能将压缩包加入它自身。');
-  }
-  if (current.entries.length - removed.length + targets.length > 100000) {
-    throw StateError('更新后的压缩包条目数超过 100,000 上限。');
   }
   final inputHashes = <String, String>{};
   for (final path in paths) {

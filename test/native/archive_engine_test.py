@@ -32,6 +32,43 @@ class NativeArchiveTests(unittest.TestCase):
     def test_list_and_utf8_extract(self):
         r = call('hz_list', self.zip); self.assertTrue(r['writable']); self.assertEqual(len(r['entries']), 3)
         output = self.root / 'out'; self.assertTrue(call('hz_extract', self.zip, '资料/hello.txt', output, 1024)['ok']); self.assertEqual(output.read_text(encoding='utf-8'), 'Hello 世界')
+    def test_list_large_archives_without_entry_count_limit(self):
+        for count in [1001, 100001]:
+            with self.subTest(count=count):
+                with zipfile.ZipFile(self.zip, 'w') as archive:
+                    for index in range(count):
+                        archive.writestr(f'files/{index}.txt', b'')
+                result = call('hz_list', self.zip)
+                self.assertTrue(result['writable'])
+                self.assertEqual(len(result['entries']), count)
+                self.assertEqual(result['entries'][-1]['path'], f'files/{count - 1}.txt')
+                output = self.root / f'last-{count}'
+                self.assertTrue(call('hz_extract', self.zip, f'files/{count - 1}.txt', output, 0)['ok'])
+                self.assertEqual(output.read_bytes(), b'')
+    def test_large_extraction_batch_reaches_entry_validation(self):
+        count = 100001
+        names = (ctypes.c_char_p * count)(*([b'../unsafe'] * count))
+        outputs = (ctypes.c_char_p * count)(*([os.fsencode(self.root / 'out')] * count))
+        limits = (ctypes.c_int64 * count)()
+        result = call('hz_extract_batch', self.zip, names, outputs, limits, count, 0, None)
+        self.assertEqual(result['error'], 'Unsafe archive path or invalid size limit')
+        self.assertFalse((self.root / 'out').exists())
+    def test_update_without_removal_count_limit(self):
+        count = 100001
+        removed = (ctypes.c_char_p * count)(*([b'unchanged.bin'] * count))
+        output = self.root / 'updated.zip'
+        self.assertTrue(call('hz_update', self.zip, output, None, None, 0, removed, count)['ok'])
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.namelist(), ['资料/hello.txt', 'empty/'])
+            self.assertIsNone(archive.testzip())
+    def test_large_update_batch_reaches_entry_validation(self):
+        count = 100001
+        paths = (ctypes.c_char_p * count)()
+        names = (ctypes.c_char_p * count)(*([b'../unsafe'] * count))
+        output = self.root / 'updated.zip'
+        result = call('hz_update', self.zip, output, paths, names, count, None, 0)
+        self.assertEqual(result['error'], 'Unsafe new entry path')
+        self.assertFalse(output.exists())
     def test_replace_preserves_other_entries(self):
         replacement = self.root / 'new'; replacement.write_text('Updated 世界', encoding='utf-8')
         output = self.root / 'updated.zip'; self.assertTrue(call('hz_replace', self.zip, '资料/hello.txt', replacement, output)['ok'])
@@ -55,21 +92,23 @@ class NativeArchiveTests(unittest.TestCase):
     def test_additional_formats_roundtrip_and_update(self):
         source = self.root / 'source'; source.write_bytes(b'original')
         replacement = self.root / 'replacement'; replacement.write_bytes(b'changed')
-        for ext in ['7z', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz', 'tar.lzma', 'cpio']:
+        for ext in ['7z', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz', 'tar.lzma',
+                    'tar.zst', 'tar.lz4', 'tar.lzip', 'tar.Z', 'cpio', 'ar']:
             with self.subTest(format=ext):
                 archive = self.root / ('created.' + ext)
                 paths = (ctypes.c_char_p * 1)(os.fsencode(source))
-                names = (ctypes.c_char_p * 1)('资料/测试.txt'.encode())
+                entry_name = b'test.txt' if ext == 'ar' else '资料/测试.txt'.encode()
+                names = (ctypes.c_char_p * 1)(entry_name)
                 self.assertTrue(call('hz_create', archive, paths, names, 1).get('ok'))
                 info = call('hz_list', archive); self.assertTrue(info.get('writable'), info)
                 output = self.root / ('extract-' + ext)
-                self.assertTrue(call('hz_extract', archive, '资料/测试.txt', output, 1024).get('ok'))
+                self.assertTrue(call('hz_extract', archive, entry_name, output, 1024).get('ok'))
                 self.assertEqual(output.read_bytes(), b'original')
                 updated = self.root / ('updated.' + ext)
-                self.assertTrue(call('hz_replace', archive, '资料/测试.txt', replacement, updated).get('ok'))
+                self.assertTrue(call('hz_replace', archive, entry_name, replacement, updated).get('ok'))
                 self.assertEqual(call('hz_list', updated)['format'], info['format'])
                 final = self.root / ('updated-data-' + ext)
-                self.assertTrue(call('hz_extract', updated, '资料/测试.txt', final, 1024).get('ok'))
+                self.assertTrue(call('hz_extract', updated, entry_name, final, 1024).get('ok'))
                 self.assertEqual(final.read_bytes(), b'changed')
                 appended = self.root / ('appended.' + ext)
                 extra_names = (ctypes.c_char_p * 1)(b'new.txt')
@@ -79,7 +118,7 @@ class NativeArchiveTests(unittest.TestCase):
     def test_single_file_compression_roundtrip(self):
         source = self.root / 'single.txt'; source.write_bytes(b'stream content')
         paths = (ctypes.c_char_p * 1)(os.fsencode(source)); names = (ctypes.c_char_p * 1)(b'single.txt')
-        for ext in ['gz', 'bz2', 'xz', 'lzma']:
+        for ext in ['gz', 'bz2', 'xz', 'lzma', 'zst', 'lz4', 'lzip', 'Z']:
             with self.subTest(format=ext):
                 archive = self.root / ('single.txt.' + ext)
                 self.assertTrue(call('hz_create', archive, paths, names, 1).get('ok'))

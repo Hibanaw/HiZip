@@ -1,10 +1,17 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hizip/models/archive_formats.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('recognizes archive paths case-insensitively', () {
+    expect(isReadableArchivePath('/tmp/archive.zip'), isTrue);
+    expect(isReadableArchivePath('/tmp/archive.TAR.Z'), isTrue);
+    expect(isReadableArchivePath('/tmp/document.txt'), isFalse);
+  });
+
   for (final extension in [
     'zip',
     '7z',
@@ -13,11 +20,20 @@ void main() {
     'tar.bz2',
     'tar.xz',
     'tar.lzma',
+    'tar.zst',
+    'tar.lz4',
+    'tar.lzip',
+    'tar.Z',
     'cpio',
+    'ar',
     'gz',
     'bz2',
     'xz',
     'lzma',
+    'zst',
+    'lz4',
+    'lzip',
+    'Z',
   ]) {
     test('service round trip preserves $extension during edits', () async {
       final root = await Directory.systemTemp.createTemp('hizip-formats-');
@@ -49,7 +65,12 @@ void main() {
           'tar.bz2',
           'tar.xz',
           'tar.lzma',
+          'tar.zst',
+          'tar.lz4',
+          'tar.lzip',
+          'tar.Z',
           'cpio',
+          'ar',
         ].contains(extension)) {
           final added = File(p.join(root.path, 'second.txt'));
           await added.writeAsString('second');

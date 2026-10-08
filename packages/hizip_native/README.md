@@ -9,7 +9,7 @@ HiZip 的原生压缩引擎，使用 libarchive 解析、解压和创建压缩�
 - C 接口返回由调用方拥有的 JSON 结果，使用 `hz_free` 释放。
 - 提取目标必须是新文件，避免覆盖已有内容。
 - 更新操作写入独立输出文件，不直接修改原包。应用服务层负责校验、备份和提交替换。
-- 支持 ZIP、7z、TAR、压缩 TAR 和 CPIO 的创建与更新，以及 gzip、bzip2、xz、LZMA 单文件压缩。
+- 支持 ZIP、7z、TAR、压缩 TAR、CPIO 和 AR 的创建与更新，以及 gzip、bzip2、xz、LZMA、zstd、LZ4、lzip、compress 单文件压缩。
 - 格式与编解码能力由目标平台的 libarchive 构建决定。
 
 ## 平台集成

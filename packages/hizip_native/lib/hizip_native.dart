@@ -6,6 +6,7 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 
 typedef _One = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _PrepareWorkerNative = Void Function();
 typedef _ExtractNative =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int64);
 typedef _Extract =
@@ -298,6 +299,8 @@ class NativeArchive {
   }
 }
 
+bool _workerPrepared = false;
+
 Map<String, dynamic> _list(String path, String encoding) {
   if (encoding != 'auto') {
     return {
@@ -451,7 +454,7 @@ void _configure(
 
 DynamicLibrary _openLibrary() {
   final override = Platform.environment['HIZIP_NATIVE_LIBRARY'];
-  return DynamicLibrary.open(
+  final lib = DynamicLibrary.open(
     override ??
         (Platform.isMacOS || Platform.isIOS
             ? 'hizip_native.framework/hizip_native'
@@ -459,4 +462,11 @@ DynamicLibrary _openLibrary() {
             ? 'hizip_native.dll'
             : 'libhizip_native.so'),
   );
+  if (!_workerPrepared) {
+    lib.lookupFunction<_PrepareWorkerNative, void Function()>(
+      'hz_prepare_worker',
+    )();
+    _workerPrepared = true;
+  }
+  return lib;
 }

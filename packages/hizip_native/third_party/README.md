@@ -17,4 +17,4 @@ Do not strip these when distributing binaries.
 Available codecs depend on libraries detected by upstream CMake. Install zlib
 and liblzma development packages for desktop builds. Android zlib is supplied
 by the NDK; cross-compiled liblzma/bzip2/zstd can be added for more codecs.
-Encrypted archives, RAR writing and split-volume archives are outside v0.1.
+Encrypted archives, RAR/XAR writing and split-volume archives are outside v0.1.

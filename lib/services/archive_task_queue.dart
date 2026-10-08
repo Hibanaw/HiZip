@@ -5,7 +5,11 @@ import 'package:flutter/foundation.dart';
 class ArchiveTask {
   ArchiveTask(this.archive, this.title);
   final String archive, title;
-  bool running = false;
+  bool running = false, cancelled = false;
+}
+
+class ArchiveTaskCancelled implements Exception {
+  const ArchiveTaskCancelled();
 }
 
 class _TaskScope {
@@ -23,6 +27,12 @@ class ArchiveTaskQueue extends ChangeNotifier {
   final _tasks = <ArchiveTask>[];
   bool _disposed = false, _accepting = true;
   List<ArchiveTask> get tasks => List.unmodifiable(_tasks);
+
+  void cancel(ArchiveTask task) {
+    if (!_tasks.contains(task) || task.cancelled) return;
+    task.cancelled = true;
+    _notify();
+  }
 
   Future<T> run<T>(
     String archive,
@@ -56,6 +66,11 @@ class ArchiveTaskQueue extends ChangeNotifier {
         } catch (_) {
           // A failed preceding event must not block the next event.
         }
+      }
+      if (task.cancelled) {
+        _tasks.remove(task);
+        _notify();
+        throw const ArchiveTaskCancelled();
       }
       task.running = true;
       _notify();

@@ -97,4 +97,21 @@ void main() {
       queue.dispose();
     },
   );
+
+  test('queued tasks can be cancelled before they start', () async {
+    final queue = ArchiveTaskQueue();
+    final gate = Completer<void>();
+    final first = queue.run('a.zip', 'active', () => gate.future);
+    var ran = false;
+    final second = queue.run('a.zip', 'queued', () async => ran = true);
+    final task = queue.tasks.last;
+    queue.cancel(task);
+    expect(task.cancelled, isTrue);
+    gate.complete();
+    await first;
+    await expectLater(second, throwsA(isA<ArchiveTaskCancelled>()));
+    expect(ran, isFalse);
+    expect(queue.tasks, isEmpty);
+    queue.dispose();
+  });
 }

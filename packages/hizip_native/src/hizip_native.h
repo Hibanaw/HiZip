@@ -7,6 +7,7 @@
 #define HZ_EXPORT __attribute__((visibility("default"))) __attribute__((used))
 #endif
 HZ_EXPORT void hz_configure_encoding(const char *read, const char *write, int level);
+HZ_EXPORT void hz_prepare_worker(void);
 HZ_EXPORT char *hz_list(const char *path);
 HZ_EXPORT char *hz_extract(const char *path, const char *entry, const char *output, int64_t limit);
 typedef void (*hz_extract_progress)(int32_t completed, int64_t bytes);
