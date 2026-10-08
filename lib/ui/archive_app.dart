@@ -3249,7 +3249,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         TextSpan(
                           text: 'Hi',
                           style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.primary.withValues(alpha: .5),
                           ),
                         ),
                         const TextSpan(text: 'Zip'),
@@ -3262,7 +3264,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       fontWeight: FontWeight.w800,
                       letterSpacing: -4,
                       height: 1,
-                      color: desktopColor(context, 0x0c000000, 0x14ffffff),
+                      color: desktopColor(context, 0x08000000, 0x0dffffff),
                     ),
                   ),
                 ),

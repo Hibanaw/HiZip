@@ -112,14 +112,14 @@ void main() {
         final spans = (watermark.textSpan! as TextSpan).children!;
         expect(watermark.textSpan!.toPlainText(), 'HiZip');
         expect((spans.first as TextSpan).text, 'Hi');
-        expect(spans.first.style!.color, accent.color);
+        expect(spans.first.style!.color, accent.color.withValues(alpha: .5));
         expect((spans.last as TextSpan).text, 'Zip');
         expect(spans.last.style, isNull);
         expect(
           watermark.style!.color,
           brightness == Brightness.dark
-              ? const Color(0x14ffffff)
-              : const Color(0x0c000000),
+              ? const Color(0x0dffffff)
+              : const Color(0x08000000),
         );
         expect(tester.takeException(), isNull);
       }
