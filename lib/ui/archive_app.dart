@@ -2096,7 +2096,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Future<void> updateApplication(ArchiveEntry entry, int token) async {
-    final app = entry.directory
+    final app = entry.directory || isReadableArchivePath(entry.name)
         ? null
         : await desktop.defaultApplication(entry.name);
     if (mounted && token == previewRequest) {
@@ -2503,33 +2503,32 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     enabled: !busy,
     primaryClick: true,
     openUpwards: true,
-    childBuilder: (_, shown, _) => Semantics(
-      button: true,
-      expanded: shown,
-      child: AppTooltip(
-        message: '打开方式',
-        child: SizedBox(
-          width: 28,
-          height: 28,
-          child: Icon(
-            shown ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_up,
-            size: 12,
-            color: muted,
-          ),
-        ),
+    triggerBuilder: (_, shown, toggle) => DesktopButton(
+      key: const ValueKey('selection-open-menu'),
+      flat: true,
+      tooltip: '打开方式',
+      minHeight: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      onPressed: busy ? null : toggle,
+      child: Icon(
+        shown ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_up,
+        size: 12,
       ),
     ),
-    applications: () => desktop.applicationsForFile(entry.name),
-    onOpenWith: busy ? null : (app) => openEntry(entry, application: app),
-    onChooseApplication: busy ? null : () => chooseOpenApplication(entry),
-    child: const AppTooltip(
-      message: '打开方式',
-      child: SizedBox(
-        width: 28,
-        height: 28,
-        child: Icon(CupertinoIcons.chevron_up, size: 12, color: muted),
-      ),
-    ),
+    applications: desktop.supportsFileIntegration
+        ? () => desktop.applicationsForFile(entry.name)
+        : null,
+    onOpenInHiZip:
+        !busy && entry.canExtract && isReadableArchivePath(entry.name)
+        ? () => openEntry(entry)
+        : null,
+    onOpenWith: busy || !desktop.supportsFileIntegration
+        ? null
+        : (app) => openEntry(entry, application: app),
+    onChooseApplication: busy || !desktop.supportsFileIntegration
+        ? null
+        : () => chooseOpenApplication(entry),
+    child: const SizedBox(width: 28, height: 28),
   );
 
   Widget contextMenu(
@@ -2550,6 +2549,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     onOpen: busy || (!entry.directory && !entry.canExtract)
         ? null
         : () => openEntry(entry),
+    onOpenInHiZip:
+        !busy &&
+            !entry.directory &&
+            entry.canExtract &&
+            isReadableArchivePath(entry.name)
+        ? () => openEntry(entry)
+        : null,
     onPreview: desktop.supportsQuickLook && !busy && entry.canExtract
         ? quickLook
         : null,
@@ -3964,15 +3970,24 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   );
 
   Widget openButton({bool compact = false}) {
-    final split = desktop.supportsFileIntegration && selected != null;
-    final label = selectedApplication == null
+    final openInHiZip =
+        selected != null && isReadableArchivePath(selected!.name);
+    final split =
+        selected != null && (desktop.supportsFileIntegration || openInHiZip);
+    final label = openInHiZip
+        ? '在 HiZip 中打开'
+        : selectedApplication == null
         ? '在默认应用中打开'
         : '用 ${selectedApplication!.name} 打开';
-    final icon = selectedApplication?.icon;
+    final icon = openInHiZip ? null : selectedApplication?.icon;
     final content = Row(
       mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
+        if (openInHiZip) ...[
+          const Icon(Icons.archive_outlined, size: 18),
+          const SizedBox(width: 6),
+        ],
         if (icon != null) ...[
           Image.memory(icon, width: 18, height: 18),
           const SizedBox(width: 6),
@@ -4012,13 +4027,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       ],
     );
     if (!split) return button;
+    final style = context.theme.buttonStyles
+        .resolve({FButtonVariant.outline, context.platformVariant})
+        .resolve({FButtonSizeVariant.sm, context.platformVariant});
     return Container(
       key: const ValueKey('selection-open-split'),
-      decoration: BoxDecoration(
-        color: FTheme.of(context).colors.background,
-        border: Border.all(color: FTheme.of(context).colors.border),
-        borderRadius: BorderRadius.circular(5),
-      ),
+      height: 28,
+      decoration: style.decoration.resolve({
+        if (busy) FTappableVariant.disabled,
+      }),
       clipBehavior: Clip.antiAlias,
       child: button,
     );

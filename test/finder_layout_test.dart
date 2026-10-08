@@ -78,6 +78,11 @@ class NonMacDesktop extends DesktopIntegration {
   bool get supportsQuickLook => false;
 }
 
+class OpenMenuDesktop extends FinderDesktop {
+  @override
+  bool get supportsFileIntegration => true;
+}
+
 final document = ArchiveDocument(
   '/sample.zip',
   const [
@@ -127,6 +132,35 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('open-with split button uses Forui controls and opens its menu', (
+    tester,
+  ) async {
+    final service = FinderService();
+    final desktop = OpenMenuDesktop();
+    await mount(tester, service, desktop);
+    await tester.tap(find.byKey(const ValueKey('file-root.txt')));
+    await tester.pumpAndSettle();
+    final split = find.byKey(const ValueKey('selection-open-split'));
+    final menuButton = find.byKey(const ValueKey('selection-open-menu'));
+    expect(
+      find.descendant(of: split, matching: find.byType(DesktopButton)),
+      findsNWidgets(2),
+    );
+    expect(
+      tester.getSize(split).height,
+      tester.getSize(find.byKey(const ValueKey('selection-extract'))).height,
+    );
+    await tester.tap(menuButton);
+    await tester.pumpAndSettle();
+    expect(find.text('TextEdit（默认）'), findsOneWidget);
+    expect(find.text('Test Editor'), findsOneWidget);
+    await tester.tap(find.text('Test Editor'));
+    await tester.pumpAndSettle();
+    expect(desktop.application, '/Applications/TestEditor.app');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('extract actions include selected folders and multiple items', (
     tester,

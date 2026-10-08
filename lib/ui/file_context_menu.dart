@@ -31,6 +31,7 @@ class FileContextMenu extends StatefulWidget {
     this.triggerBuilder,
     this.onSelect,
     this.onOpen,
+    this.onOpenInHiZip,
     this.onPreview,
     this.onCopy,
     this.onPaste,
@@ -59,6 +60,7 @@ class FileContextMenu extends StatefulWidget {
   final bool enabled, applicationOnly, primaryClick, openUpwards;
   final VoidCallback? onSelect,
       onOpen,
+      onOpenInHiZip,
       onPreview,
       onCopy,
       onPaste,
@@ -301,7 +303,7 @@ class _FileContextMenuState extends State<FileContextMenu>
           ),
     onPress: action == null ? null : () => invoke(action),
   );
-  List<FItemGroupMixin> appItems() => [
+  List<FItemGroupMixin> externalAppItems() => [
     FItemGroup(
       children: [
         if (apps == null) item('正在读取应用…', null),
@@ -317,6 +319,28 @@ class _FileContextMenuState extends State<FileContextMenu>
     ),
     FItemGroup(children: [item('其他…', widget.onChooseApplication)]),
   ];
+  List<FItemGroupMixin> appItems() => widget.onOpenInHiZip == null
+      ? externalAppItems()
+      : [
+          FItemGroup(
+            children: [
+              item(
+                '在 HiZip 中打开',
+                widget.onOpenInHiZip,
+                icon: const Icon(Icons.archive_outlined, size: 16),
+              ),
+              if (widget.applications != null ||
+                  widget.onChooseApplication != null)
+                FSubmenuItem(
+                  title: const AppText('其他应用'),
+                  submenu: externalAppItems(),
+                  submenuStyle: const FPopoverMenuStyleDelta.delta(
+                    motion: FPopoverMotion.none,
+                  ),
+                ),
+            ],
+          ),
+        ];
   FItemMixin actionItem(DesktopMenuAction action) => action.children == null
       ? item(
           action.title,
@@ -347,11 +371,12 @@ class _FileContextMenuState extends State<FileContextMenu>
     return [
       if (widget.onOpen != null ||
           widget.onPreview != null ||
+          widget.onOpenInHiZip != null ||
           widget.onOpenWith != null)
         FItemGroup(
           children: [
             if (widget.onOpen != null) item('打开', widget.onOpen),
-            if (widget.onOpenWith != null)
+            if (widget.onOpenInHiZip != null || widget.onOpenWith != null)
               FSubmenuItem(
                 title: const AppText('打开方式'),
                 submenu: appItems(),
