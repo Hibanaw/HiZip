@@ -210,6 +210,8 @@ void main() {
     size(tester, const Size(1440, 900));
     await workspace(tester);
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('搜索'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(FTextField));
     await tester.pump();
     expect(await tester.sendKeyDownEvent(LogicalKeyboardKey.space), false);
@@ -442,6 +444,8 @@ void main() {
         true,
       );
       // Typing spaces and cursor movement in search must not navigate the list.
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byType(TextField));
       await tester.enterText(find.byType(TextField), 'one');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);

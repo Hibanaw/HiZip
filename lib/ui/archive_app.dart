@@ -3174,11 +3174,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               ),
                             if (document != null) ...[
                               const SizedBox(width: 8),
-                              if (desktopLayout)
+                              if (desktopLayout && compactSearchOpen)
                                 SizedBox(
                                   key: const ValueKey('top-search-slot'),
                                   width: searchWidth,
-                                  child: searchField(),
+                                  child: CallbackShortcuts(
+                                    bindings: {
+                                      const SingleActivator(
+                                        LogicalKeyboardKey.escape,
+                                      ): closeCompactSearch,
+                                    },
+                                    child: searchField(),
+                                  ),
                                 )
                               else
                                 tool('搜索', FIcons.search, () {

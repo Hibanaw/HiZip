@@ -528,19 +528,11 @@ void main() {
     void checkBar() {
       expect(find.descendant(of: top, matching: path), findsOneWidget);
       expect(tester.getSize(top).height, 49);
-      if (tester.view.physicalSize.width >= 800) {
-        expect(find.descendant(of: top, matching: search), findsOneWidget);
-        expect(
-          tester.getCenter(search).dy,
-          closeTo(tester.getCenter(top).dy, 1),
-        );
-      } else {
-        expect(search, findsNothing);
-        expect(
-          find.descendant(of: top, matching: find.byTooltip('搜索')),
-          findsOneWidget,
-        );
-      }
+      expect(search, findsNothing);
+      expect(
+        find.descendant(of: top, matching: find.byTooltip('搜索')),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     }
 
@@ -602,6 +594,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('archive-search')), findsNothing);
     tester.view.physicalSize = const Size(1440, 900);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+    await tester.tap(find.byTooltip('搜索'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('archive-search')), findsOneWidget);
     expect(
