@@ -262,11 +262,17 @@ static char *list_impl(const char *path) {
       archive_entry_set_size(e, size);
     }
     append(&b, "{\"path\":"); quote(&b, name);
-    append(&b, ",\"size\":%lld,\"modified\":%lld,\"directory\":%s,\"regular\":%s,\"safe\":%s,\"encrypted\":%s}",
+    append(&b, ",\"size\":%lld,\"modified\":%lld,\"directory\":%s,\"regular\":%s,\"safe\":%s,\"encrypted\":%s",
       (long long)archive_entry_size(e), (long long)archive_entry_mtime(e),
       archive_entry_filetype(e) == AE_IFDIR ? "true" : "false",
       archive_entry_filetype(e) == AE_IFREG && !archive_entry_hardlink(e) ? "true" : "false",
       safe_name(name) ? "true" : "false", archive_entry_is_encrypted(e) > 0 ? "true" : "false");
+    if (archive_entry_filetype(e) == AE_IFLNK) {
+      const char *link = archive_entry_symlink_utf8(e);
+      if (!link) link = archive_entry_symlink(e);
+      if (link) { append(&b, ",\"link\":"); quote(&b, link); }
+    }
+    append(&b, "}");
     // Skipping data makes listing fast; decompression happens only on demand.
     if (archive_read_data_skip(a) < ARCHIVE_OK) { rc = ARCHIVE_FATAL; break; }
   }

@@ -98,7 +98,9 @@ void main() {
       expect(
         await Directory(root.path)
             .list()
-            .where((e) => p.basename(e.path).startsWith('sample-'))
+            .where(
+              (e) => e is Directory && p.basename(e.path).startsWith('sample'),
+            )
             .length,
         1,
       );

@@ -50,12 +50,23 @@ class ArchiveService {
       throw UnsupportedError('Web requires a WebAssembly archive backend');
   Future<Uint8List> preview(ArchiveDocument doc, ArchiveEntry entry) async =>
       throw UnsupportedError('Web preview unavailable');
+  Future<List<ArchiveEntry>> caseConflicts(
+    ArchiveDocument doc,
+    String destination, {
+    ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
+  }) async => const [];
+
   Future<String> extract(
     ArchiveDocument doc,
     String destination, {
     ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
     void Function(int, int)? progress,
     void Function(ExtractionProgress)? detailedProgress,
+    LinkPolicy linkPolicy = LinkPolicy.keepAll,
+    CaseConflictPolicy caseConflictPolicy = CaseConflictPolicy.rename,
+    void Function(String)? notice,
   }) async => throw UnsupportedError('Web extraction unavailable');
   Future<OpenedArchiveFile> prepareExternal(
     ArchiveDocument doc,

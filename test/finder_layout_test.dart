@@ -19,16 +19,22 @@ class FinderService extends ArchiveService {
   String? prepared;
   ArchiveDocument? extractionDocument;
   ArchiveEntry? extractionEntry;
+  List<ArchiveEntry>? extractionRoots;
   @override
   Future<String> extract(
     ArchiveDocument doc,
     String destination, {
     ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
     void Function(int, int)? progress,
     void Function(ExtractionProgress)? detailedProgress,
+    LinkPolicy linkPolicy = LinkPolicy.keepAll,
+    CaseConflictPolicy caseConflictPolicy = CaseConflictPolicy.rename,
+    void Function(String)? notice,
   }) async {
     extractionDocument = doc;
     extractionEntry = entry;
+    extractionRoots = roots;
     return '/tmp/extracted';
   }
 
@@ -185,11 +191,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('selection-extract')));
     await tester.pumpAndSettle();
-    expect(service.extractionDocument!.entries.map((e) => e.path), [
-      'docs/nested/a.txt',
-      'docs/readme.txt',
-      'root.txt',
-    ]);
+    expect(service.extractionRoots!.map((e) => e.path), ['docs', 'root.txt']);
     expect(service.extractionEntry, isNull);
     await tester.tap(find.byTooltip('预览栏'));
     await tester.pumpAndSettle();
@@ -206,7 +208,7 @@ void main() {
     expect(find.byKey(const ValueKey('selection-open')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('selection-extract')));
     await tester.pumpAndSettle();
-    expect(service.extractionEntry!.normalized, 'docs');
+    expect(service.extractionRoots!.single.normalized, 'docs');
     await tester.pumpWidget(const SizedBox());
   });
 

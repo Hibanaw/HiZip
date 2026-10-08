@@ -3,6 +3,9 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart'
+    show debugPrint, kDebugMode, visibleForTesting;
+
 import 'package:crypto/crypto.dart';
 import 'package:hizip_native/hizip_native.dart';
 import 'package:open_filex/open_filex.dart';
@@ -408,17 +411,43 @@ class ArchiveService {
     }
   });
 
+  /// Entries that would collide on [destination] because it ignores letter
+  /// case. Empty on case-sensitive disks.
+  Future<List<ArchiveEntry>> caseConflicts(
+    ArchiveDocument doc,
+    String destination, {
+    ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
+  }) async {
+    final conflicts = _caseConflictsIn(
+      _extractionScope(doc, roots ?? (entry == null ? null : [entry])),
+    );
+    if (conflicts.isEmpty) return const [];
+    if (!await _caseInsensitiveDirectory(Directory(destination))) {
+      return const [];
+    }
+    return conflicts;
+  }
+
   Future<String> extract(
     ArchiveDocument doc,
     String destination, {
     ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
     void Function(int, int)? progress,
     void Function(ExtractionProgress)? detailedProgress,
+    LinkPolicy linkPolicy = LinkPolicy.keepAll,
+    CaseConflictPolicy caseConflictPolicy = CaseConflictPolicy.rename,
+    void Function(String)? notice,
   }) async {
     final events = ReceivePort();
     var reported = -1;
     final subscription = events.listen((event) {
       final values = event as List;
+      if (values[0] == 'notice') {
+        notice?.call(values[1] as String);
+        return;
+      }
       if (values[0] != reported) {
         reported = values[0] as int;
         progress?.call(reported, values[1] as int);
@@ -438,13 +467,20 @@ class ArchiveService {
       }
     });
     final port = events.sendPort;
+    final selection = roots ?? (entry == null ? null : [entry]);
+    final insensitive =
+        _caseConflictsIn(_extractionScope(doc, selection)).isNotEmpty &&
+        await _caseInsensitiveDirectory(Directory(destination));
     try {
       final result = await _runExtract(
         doc,
         destination,
-        entry,
+        selection,
         port,
         maxExtractionWorkers,
+        linkPolicy,
+        caseConflictPolicy,
+        insensitive,
       );
       if (reported != result.$2) progress?.call(result.$2, result.$2);
       return result.$1;
@@ -779,8 +815,133 @@ Future<void> _checkInputHashes(Map<String, String> hashes) async {
   }
 }
 
+bool _underRoots(ArchiveEntry e, List<ArchiveEntry>? roots) =>
+    roots == null ||
+    roots.any(
+      (r) =>
+          e.path == r.path ||
+          (r.directory && e.normalized.startsWith('${r.normalized}/')),
+    );
+
+/// Files below [roots] (or all of [doc]) that extraction would write.
+List<ArchiveEntry> _extractionScope(
+  ArchiveDocument doc,
+  List<ArchiveEntry>? roots,
+) => doc.entries.where((e) => !e.directory && _underRoots(e, roots)).toList();
+
+/// Archive name without its (possibly compound) extension.
+String _archiveStem(String path) {
+  final name = p.basename(path);
+  final lower = name.toLowerCase();
+  for (final ext in const [
+    '.tar.gz',
+    '.tar.bz2',
+    '.tar.xz',
+    '.tar.zst',
+    '.tar.lz4',
+    '.tar.lzip',
+    '.tar.lzma',
+    '.tar.z',
+  ]) {
+    if (lower.endsWith(ext)) return name.substring(0, name.length - ext.length);
+  }
+  final stem = p.basenameWithoutExtension(name);
+  return stem.isEmpty ? name : stem;
+}
+
+/// [name] or "name 2", "name 3"… so extraction never merges into or
+/// overwrites something already in [directory].
+String _freeName(String directory, String name, Set<String> taken) {
+  final stem = p.posix.basenameWithoutExtension(name);
+  final ext = p.posix.extension(name);
+  var candidate = name;
+  for (
+    var n = 2;
+    taken.contains(candidate.toLowerCase()) ||
+        FileSystemEntity.typeSync(
+              p.join(directory, candidate),
+              followLinks: false,
+            ) !=
+            FileSystemEntityType.notFound;
+    n++
+  ) {
+    candidate = '$stem $n$ext';
+  }
+  taken.add(candidate.toLowerCase());
+  return candidate;
+}
+
+/// Lets tests exercise the case-insensitive path on any disk.
+@visibleForTesting
+bool? debugForceCaseInsensitive;
+
+/// Whether [dir] treats names that differ only by case as the same file.
+Future<bool> _caseInsensitiveDirectory(Directory dir) async {
+  if (debugForceCaseInsensitive != null) return debugForceCaseInsensitive!;
+  final probe = File(p.join(dir.path, '.HiZipCase${pid}_${dir.hashCode}'));
+  try {
+    await probe.writeAsString('');
+    return await File(p.join(dir.path, p.basename(probe.path).toLowerCase()))
+        .exists();
+  } on FileSystemException {
+    return false;
+  } finally {
+    try {
+      if (await probe.exists()) await probe.delete();
+    } on FileSystemException {
+      /* Leave the probe; it is a harmless hidden empty file. */
+    }
+  }
+}
+
+/// Later entries whose path equals an earlier one except for letter case.
+List<ArchiveEntry> _caseConflictsIn(List<ArchiveEntry> entries) {
+  final first = <String, String>{};
+  final result = <ArchiveEntry>[];
+  for (final e in entries) {
+    final owner = first.putIfAbsent(e.normalized.toLowerCase(), () => e.path);
+    if (owner != e.path) result.add(e);
+  }
+  return result;
+}
+
+bool _isSymlink(ArchiveEntry e) => e.isSymlink && e.safe && !e.encrypted;
+
+/// Hard links and special files inside a folder are left out instead of
+/// failing the whole extraction.
+bool _isSkippableSpecial(ArchiveEntry e) =>
+    !e.directory &&
+    !e.regular &&
+    !e.encrypted &&
+    e.safe &&
+    e.linkTarget == null;
+
+/// Creates a symlink as the final step, after every regular file is written,
+/// so no later entry can be written through a link leaving the destination.
+Future<bool> _createLink(String output, String target) async {
+  try {
+    await Directory(p.dirname(output)).create(recursive: true);
+    await Link(output).create(target);
+    return true;
+  } on FileSystemException catch (error) {
+    // Windows without symlink privilege, or a name clash with a real entry.
+    if (kDebugMode) {
+      debugPrint('[HiZip] symlink not created: "$output" -> "$target": $error');
+    }
+    return false;
+  }
+}
+
 void _validate(ArchiveEntry e) {
   if (!e.canExtract || !isSafeArchivePath(e.normalized)) {
+    if (kDebugMode) {
+      debugPrint(
+        '[HiZip] extract rejected: path="${e.path}" '
+        'safe=${e.safe} regular=${e.regular} directory=${e.directory} '
+        'encrypted=${e.encrypted} size=${e.size} '
+        'pathSafe=${isSafeArchivePath(e.normalized)}',
+      );
+    }
     throw StateError('此文件是链接、加密文件或包含不安全路径，暂不支持解压。');
   }
 }
@@ -819,48 +980,164 @@ Future<(List<String>, List<String>)> _scanInputFiles(
 Future<(String, int)> _runExtract(
   ArchiveDocument doc,
   String destination,
-  ArchiveEntry? entry,
+  List<ArchiveEntry>? roots,
   SendPort port,
   int? maxWorkers,
+  LinkPolicy linkPolicy,
+  CaseConflictPolicy caseConflictPolicy,
+  bool caseInsensitive,
 ) => runArchiveWorker(
-  () => _extractArchive(doc, destination, entry, port, maxWorkers),
+  () => _extractArchive(
+    doc,
+    destination,
+    roots,
+    port,
+    maxWorkers,
+    linkPolicy,
+    caseConflictPolicy,
+    caseInsensitive,
+  ),
   name: 'hizip-extract',
 );
 
 Future<(String, int)> _extractArchive(
   ArchiveDocument doc,
   String destination,
-  ArchiveEntry? entry,
+  List<ArchiveEntry>? roots,
   SendPort progress,
   int? maxWorkers,
+  LinkPolicy linkPolicy,
+  CaseConflictPolicy caseConflictPolicy,
+  bool caseInsensitive,
 ) async {
-  final prefix = entry?.directory == true ? '${entry!.normalized}/' : '';
-  final selected = doc.entries
-      .where(
-        (e) =>
-            !e.directory &&
-            (entry == null ||
-                (entry.directory
-                    ? e.normalized.startsWith(prefix)
-                    : e.path == entry.path)),
-      )
+  final bulk = roots == null || roots.any((r) => r.directory);
+  final inScope = _extractionScope(doc, roots);
+  var links = inScope
+      .where(_isSymlink)
+      .where((e) => linkPolicy == LinkPolicy.keepAll || !e.hasUnsafeLink)
       .toList();
-  final seen = <String>{};
-  var total = 0;
+  var skippedSpecial = 0;
+  var selected = inScope.where((e) {
+    if (_isSymlink(e)) return false;
+    if (!bulk || !_isSkippableSpecial(e)) return true;
+    skippedSpecial++;
+    if (kDebugMode) debugPrint('[HiZip] extract skipped special: "${e.path}"');
+    return false;
+  }).toList();
+  if (kDebugMode && links.isNotEmpty) {
+    debugPrint('[HiZip] extract will create ${links.length} symlink(s)');
+  }
   for (final e in selected) {
     _validate(e);
-    if (!seen.add(e.normalized.toLowerCase())) {
+  }
+  for (final e in links) {
+    if (!isSafeArchivePath(e.normalized)) {
+      throw StateError('不安全的目录路径。');
+    }
+  }
+  // The same path twice is always an error; paths differing only by case
+  // collide only on disks that ignore case.
+  final exact = <String>{};
+  for (final e in [...selected, ...links]) {
+    if (!exact.add(e.normalized)) {
       throw StateError('压缩包含有重复的文件路径，无法安全解压。');
     }
+  }
+  final renamed = <String, String>{};
+  var skippedCase = 0;
+  if (caseInsensitive && _caseConflictsIn([...selected, ...links]).isNotEmpty) {
+    final taken = <String>{};
+    final dropped = <String>{};
+    for (final e in [...selected, ...links]) {
+      var path = e.normalized;
+      if (taken.contains(path.toLowerCase())) {
+        if (caseConflictPolicy == CaseConflictPolicy.skip) {
+          dropped.add(e.path);
+          skippedCase++;
+          if (kDebugMode) {
+            debugPrint('[HiZip] extract skipped case clash: "${e.path}"');
+          }
+          continue;
+        }
+        final dir = p.posix.dirname(path);
+        final stem = p.posix.basenameWithoutExtension(path);
+        final ext = p.posix.extension(path);
+        var n = 2;
+        do {
+          final name = '$stem ($n)$ext';
+          path = dir == '.' ? name : '$dir/$name';
+          n++;
+        } while (taken.contains(path.toLowerCase()) || exact.contains(path));
+        renamed[e.path] = path;
+        if (kDebugMode) {
+          debugPrint(
+            '[HiZip] extract renamed case clash: "${e.path}" -> "$path"',
+          );
+        }
+      }
+      taken.add(path.toLowerCase());
+    }
+    selected = selected.where((e) => !dropped.contains(e.path)).toList();
+    links = links.where((e) => !dropped.contains(e.path)).toList();
+  }
+  // Whole archives go in a folder named after the archive; a selection goes
+  // straight into the destination without its parent folders.
+  final partial = roots != null && roots.isNotEmpty;
+  final topNames = <String, String>{};
+  if (partial) {
+    final used = <String>{};
+    for (final r in roots) {
+      topNames[r.path] = _freeName(
+        destination,
+        p.posix.basename(r.normalized),
+        used,
+      );
+    }
+  }
+  ArchiveEntry? rootOf(String normalized, String path) {
+    for (final r in roots ?? const <ArchiveEntry>[]) {
+      if (r.path == path ||
+          (r.directory && normalized.startsWith('${r.normalized}/'))) {
+        return r;
+      }
+    }
+    return null;
+  }
+
+  String placed(String normalized, String path, String full) {
+    final r = rootOf(normalized, path);
+    if (!partial || r == null) return full;
+    final top = topNames[r.path]!;
+    return r.path == path ? top : '$top${full.substring(r.normalized.length)}';
+  }
+
+  String relativeOutput(ArchiveEntry e) =>
+      placed(e.normalized, e.path, renamed[e.path] ?? e.normalized);
+  var total = 0;
+  for (final e in selected) {
     total += e.size < 0 ? 0 : e.size;
   }
-  final root = await Directory(destination)
-      .createTemp('${p.basenameWithoutExtension(doc.path)}-');
+  final String rootPath;
+  if (partial) {
+    rootPath = destination;
+  } else {
+    rootPath = p.join(
+      destination,
+      _freeName(destination, _archiveStem(doc.path), <String>{}),
+    );
+    await Directory(rootPath).create();
+  }
+  final created = [
+    if (partial)
+      for (final r in roots) p.join(destination, topNames[r.path]!)
+    else
+      rootPath,
+  ];
   try {
     final outputs = <String>[];
     final parents = <String>{};
     for (final e in selected) {
-      final output = p.joinAll([root.path, ...e.normalized.split('/')]);
+      final output = p.joinAll([rootPath, ...relativeOutput(e).split('/')]);
       outputs.add(output);
       parents.add(p.dirname(output));
     }
@@ -916,23 +1193,47 @@ Future<(String, int)> _extractArchive(
       events.close();
     }
     progress.send([selected.length, selected.length, total, total, '', 0, 0]);
-    // Preserve empty folders too. Never create archive-provided symlinks.
+    // Preserve empty folders too.
     for (final e in doc.entries.where(
-      (e) =>
-          e.directory &&
-          (entry == null ||
-              (entry.directory &&
-                  (e.normalized == entry.normalized ||
-                      e.normalized.startsWith(prefix)))),
+      (e) => e.directory && _underRoots(e, roots),
     )) {
       if (e.safe && isSafeArchivePath(e.normalized)) {
-        await Directory(p.joinAll([root.path, ...e.normalized.split('/')]))
-            .create(recursive: true);
+        await Directory(
+          p.joinAll([
+            rootPath,
+            ...placed(e.normalized, e.path, e.normalized).split('/'),
+          ]),
+        ).create(recursive: true);
       }
     }
-    return (root.path, selected.length);
+    var failedLinks = 0;
+    for (final e in links) {
+      final created = await _createLink(
+        p.joinAll([rootPath, ...relativeOutput(e).split('/')]),
+        e.linkTarget!,
+      );
+      if (!created) failedLinks++;
+    }
+    final notes = [
+      if (skippedSpecial > 0) '已跳过 $skippedSpecial 个硬链接或特殊文件',
+      if (failedLinks > 0) '$failedLinks 个符号链接无法创建',
+      if (renamed.isNotEmpty) '已重命名 ${renamed.length} 个仅大小写不同的文件',
+      if (skippedCase > 0) '已跳过 $skippedCase 个仅大小写不同的文件',
+    ];
+    if (notes.isNotEmpty) progress.send(['notice', notes.join('；')]);
+    return (
+      partial && roots.length == 1 ? created.single : rootPath,
+      selected.length + links.length - failedLinks,
+    );
   } catch (_) {
-    await root.delete(recursive: true);
+    for (final path in created) {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.directory) {
+        await Directory(path).delete(recursive: true);
+      } else if (type != FileSystemEntityType.notFound) {
+        await File(path).delete();
+      }
+    }
     rethrow;
   }
 }
@@ -945,6 +1246,7 @@ Future<List<String>> _exportArchive(
   final root = await Directory(sessionPath).createTemp('transfer-');
   final paths = <String>[];
   final seen = <String>{};
+  final deferredLinks = <(String, String)>[];
   try {
     for (final entry in topLevelEntries(entries)) {
       final target = p.join(root.path, entry.name);
@@ -959,7 +1261,9 @@ Future<List<String>> _exportArchive(
       }
       final contents = entry.directory
           ? doc.entries.where(
-              (e) => e.normalized.startsWith('${entry.normalized}/'),
+              (e) =>
+                  e.normalized.startsWith('${entry.normalized}/') &&
+                  !_isSkippableSpecial(e),
             )
           : [entry];
       for (final e in contents) {
@@ -974,6 +1278,9 @@ Future<List<String>> _exportArchive(
             throw StateError('不安全的目录路径。');
           }
           await Directory(output).create(recursive: true);
+        } else if (_isSymlink(e)) {
+          // A drag cannot ask the user, so links leaving the folder are left out.
+          if (!e.hasUnsafeLink) deferredLinks.add((output, e.linkTarget!));
         } else {
           _validate(e);
           await File(output).parent.create(recursive: true);
@@ -986,6 +1293,9 @@ Future<List<String>> _exportArchive(
         }
       }
       paths.add(target);
+    }
+    for (final (output, target) in deferredLinks) {
+      await _createLink(output, target);
     }
     return paths;
   } catch (_) {

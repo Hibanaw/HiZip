@@ -48,8 +48,12 @@ class QueuedArchiveService extends ArchiveService {
     ArchiveDocument doc,
     String destination, {
     ArchiveEntry? entry,
+    List<ArchiveEntry>? roots,
     void Function(int, int)? progress,
     void Function(ExtractionProgress)? detailedProgress,
+    LinkPolicy linkPolicy = LinkPolicy.keepAll,
+    CaseConflictPolicy caseConflictPolicy = CaseConflictPolicy.rename,
+    void Function(String)? notice,
   }) => queue.run(
     doc.path,
     '正在解压',
@@ -57,8 +61,12 @@ class QueuedArchiveService extends ArchiveService {
       doc,
       destination,
       entry: entry,
+      roots: roots,
       progress: progress,
       detailedProgress: detailedProgress,
+      linkPolicy: linkPolicy,
+      caseConflictPolicy: caseConflictPolicy,
+      notice: notice,
     ),
   );
   @override
