@@ -219,8 +219,16 @@ void main() {
     final toolbar = find.byKey(const ValueKey('workspace-top-bar'));
     final toolbarBounds = tester.getRect(toolbar);
     final directoryButton = find.descendant(
-      of: toolbar,
+      of: find.byKey(const ValueKey('workspace-status-bar')),
       matching: find.byTooltip('目录'),
+    );
+    expect(
+      find.descendant(of: toolbar, matching: find.byTooltip('目录')),
+      findsNothing,
+    );
+    expect(
+      tester.getRect(directoryButton).top,
+      greaterThan(toolbarBounds.bottom),
     );
     await tester.tap(directoryButton);
     await tester.pumpAndSettle();

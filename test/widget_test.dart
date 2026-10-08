@@ -321,7 +321,7 @@ void main() {
   testWidgets('phone directory drawer works without overflow', (tester) async {
     size(tester, const Size(390, 844));
     await tester.pumpWidget(const HiZipApp());
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(const ValueKey('directory-drawer-toggle')));
     await tester.pumpAndSettle();
     expect(find.text('目录'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -343,6 +343,38 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    final menuButton = find.byTooltip('应用菜单');
+    final backButton = find.byTooltip('返回');
+    for (final width in [390.0, 700.0, 1440.0]) {
+      tester.view.physicalSize = Size(width, 900);
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(menuButton).right,
+        lessThanOrEqualTo(tester.getRect(backButton).left),
+      );
+      if (width < 800) {
+        final directoryButton = find.byKey(
+          const ValueKey('directory-drawer-toggle'),
+        );
+        expect(
+          find.descendant(
+            of: directoryButton,
+            matching: find.byIcon(FIcons.folderTree),
+          ),
+          findsOneWidget,
+        );
+      } else {
+        expect(
+          find.byKey(const ValueKey('directory-drawer-toggle')),
+          findsNothing,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+    expect(
+      find.descendant(of: menuButton, matching: find.byIcon(Icons.menu)),
+      findsOneWidget,
+    );
     await tester.tap(find.byTooltip('应用菜单'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('application-menu')), findsOneWidget);

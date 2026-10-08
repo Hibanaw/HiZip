@@ -2325,7 +2325,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               ),
                             ),
                           ),
-                          footer(),
+                          footer(desktopLayout),
                         ],
                       ),
                     ),
@@ -2975,7 +2975,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         expanded: shown,
         child: DesktopIconButton(
           tooltip: '应用菜单',
-          icon: const Icon(Icons.more_horiz, size: 19),
+          icon: const Icon(Icons.menu, size: 19),
           active: shown,
           onPressed: toggle,
         ),
@@ -3055,119 +3055,119 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(child: windowDragArea(const SizedBox.expand())),
-            if (!desktopLayout && compactSearchOpen && document != null)
-              CallbackShortcuts(
-                bindings: {
-                  const SingleActivator(LogicalKeyboardKey.escape):
-                      closeCompactSearch,
-                },
-                child: Row(
-                  children: [
-                    Expanded(child: searchField()),
-                    const SizedBox(width: 8),
-                    tool('关闭搜索', CupertinoIcons.xmark, closeCompactSearch),
-                  ],
-                ),
-              )
-            else
-              Row(
-                children: [
-                  windowLeadingControls(),
-                  if (!desktopLayout)
-                    Builder(
-                      builder: (context) => tool('目录', Icons.menu, () {
-                        final scaffold = contentScaffold.currentState;
-                        if (scaffold?.isDrawerOpen == true) {
-                          scaffold?.closeDrawer();
-                        } else {
-                          scaffold?.openDrawer();
-                        }
-                      }),
-                    ),
-                  tool(
-                    '返回',
-                    CupertinoIcons.chevron_left,
-                    busy || history.isEmpty ? null : goBack,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: document == null
-                        ? windowDragArea(
-                            const Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                'HiZip',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
+            Row(
+              children: [
+                windowLeadingControls(),
+                if (!desktop.supportsMenuBar) applicationMenu(),
+                Expanded(
+                  child: !desktopLayout && compactSearchOpen && document != null
+                      ? CallbackShortcuts(
+                          bindings: {
+                            const SingleActivator(LogicalKeyboardKey.escape):
+                                closeCompactSearch,
+                          },
+                          child: Row(
+                            children: [
+                              Expanded(child: searchField()),
+                              const SizedBox(width: 8),
+                              tool(
+                                '关闭搜索',
+                                CupertinoIcons.xmark,
+                                closeCompactSearch,
                               ),
+                            ],
+                          ),
+                        )
+                      : Row(
+                          children: [
+                            tool(
+                              '返回',
+                              CupertinoIcons.chevron_left,
+                              busy || history.isEmpty ? null : goBack,
                             ),
-                          )
-                        : pathNavigation(),
-                  ),
-                  if (desktopLayout && document != null) ...[
-                    tool(
-                      '列表视图',
-                      CupertinoIcons.list_bullet,
-                      () => changeView('list'),
-                      active: !grid && !columns && !gallery,
-                    ),
-                    tool(
-                      '图标视图',
-                      CupertinoIcons.square_grid_2x2,
-                      () => changeView('grid'),
-                      active: grid,
-                    ),
-                    tool(
-                      '多栏视图',
-                      CupertinoIcons.rectangle_split_3x1,
-                      () => changeView('columns'),
-                      active: columns,
-                    ),
-                    tool(
-                      '画廊视图',
-                      CupertinoIcons.rectangle_stack,
-                      () => changeView('gallery'),
-                      active: gallery,
-                    ),
-                    tool(
-                      '预览栏',
-                      CupertinoIcons.sidebar_right,
-                      toggleInspector,
-                      active: inspector,
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  if (document != null)
-                    tool(
-                      '解压',
-                      CupertinoIcons.arrow_down_to_line,
-                      closing ? null : () => extract(),
-                    ),
-                  if (document != null) ...[
-                    const SizedBox(width: 8),
-                    if (desktopLayout)
-                      SizedBox(
-                        key: const ValueKey('top-search-slot'),
-                        width: searchWidth,
-                        child: searchField(),
-                      )
-                    else
-                      tool('搜索', FIcons.search, () {
-                        setState(() => compactSearchOpen = true);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted && compactSearchOpen) {
-                            searchFocus.requestFocus();
-                          }
-                        });
-                      }, active: search.text.isNotEmpty),
-                    const SizedBox(width: 8),
-                  ],
-                  if (!desktop.supportsMenuBar) applicationMenu(),
-                  windowTrailingControls(),
-                ],
-              ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: document == null
+                                  ? windowDragArea(
+                                      const Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'HiZip',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : pathNavigation(),
+                            ),
+                            if (desktopLayout && document != null) ...[
+                              tool(
+                                '列表视图',
+                                CupertinoIcons.list_bullet,
+                                () => changeView('list'),
+                                active: !grid && !columns && !gallery,
+                              ),
+                              tool(
+                                '图标视图',
+                                CupertinoIcons.square_grid_2x2,
+                                () => changeView('grid'),
+                                active: grid,
+                              ),
+                              tool(
+                                '多栏视图',
+                                CupertinoIcons.rectangle_split_3x1,
+                                () => changeView('columns'),
+                                active: columns,
+                              ),
+                              tool(
+                                '画廊视图',
+                                CupertinoIcons.rectangle_stack,
+                                () => changeView('gallery'),
+                                active: gallery,
+                              ),
+                              tool(
+                                '预览栏',
+                                CupertinoIcons.sidebar_right,
+                                toggleInspector,
+                                active: inspector,
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                            if (document != null)
+                              tool(
+                                '解压',
+                                CupertinoIcons.arrow_down_to_line,
+                                closing ? null : () => extract(),
+                              ),
+                            if (document != null) ...[
+                              const SizedBox(width: 8),
+                              if (desktopLayout)
+                                SizedBox(
+                                  key: const ValueKey('top-search-slot'),
+                                  width: searchWidth,
+                                  child: searchField(),
+                                )
+                              else
+                                tool('搜索', FIcons.search, () {
+                                  setState(() => compactSearchOpen = true);
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    if (mounted && compactSearchOpen) {
+                                      searchFocus.requestFocus();
+                                    }
+                                  });
+                                }, active: search.text.isNotEmpty),
+                              const SizedBox(width: 8),
+                            ],
+                            windowTrailingControls(),
+                          ],
+                        ),
+                ),
+              ],
+            ),
           ],
         ),
       );
@@ -4497,7 +4497,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget footer() {
+  Widget footer(bool desktopLayout) {
     final data = feedback.data;
     final confirmation =
         data != null &&
@@ -4631,6 +4631,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             ),
           ),
         Container(
+          key: const ValueKey('workspace-status-bar'),
           height: 30,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
@@ -4643,6 +4644,22 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           ),
           child: Row(
             children: [
+              if (!desktopLayout) ...[
+                DesktopIconButton(
+                  key: const ValueKey('directory-drawer-toggle'),
+                  tooltip: '目录',
+                  icon: const Icon(FIcons.folderTree, size: 17),
+                  onPressed: () {
+                    final scaffold = contentScaffold.currentState;
+                    if (scaffold?.isDrawerOpen == true) {
+                      scaffold?.closeDrawer();
+                    } else {
+                      scaffold?.openDrawer();
+                    }
+                  },
+                ),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: Tooltip(
                   message: text,
