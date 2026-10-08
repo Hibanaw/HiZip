@@ -13,6 +13,7 @@ import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/desktop_integration.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/models/browsing_preferences.dart';
+import 'package:hizip/models/theme_accent.dart';
 import 'package:hizip/ui/archive_app.dart';
 import 'package:hizip/ui/file_item_surface.dart';
 
@@ -87,6 +88,44 @@ Future<void> workspace(WidgetTester tester) => tester.pumpWidget(
 );
 
 void main() {
+  for (final brightness in Brightness.values) {
+    testWidgets('background Hi follows theme accent in $brightness', (
+      tester,
+    ) async {
+      for (final accent in [ThemeAccent.blue, ThemeAccent.rose]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: desktopTheme(brightness: brightness, accent: accent),
+            builder: foruiBuilder,
+            home: ArchiveWorkspace(
+              initialDocument: sample,
+              service: TestService(),
+              desktop: TestDesktop(),
+              enableNativeTransfers: false,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final watermark = tester.widget<Text>(
+          find.byKey(const ValueKey('workspace-watermark')),
+        );
+        final spans = (watermark.textSpan! as TextSpan).children!;
+        expect(watermark.textSpan!.toPlainText(), 'HiZip');
+        expect((spans.first as TextSpan).text, 'Hi');
+        expect(spans.first.style!.color, accent.color);
+        expect((spans.last as TextSpan).text, 'Zip');
+        expect(spans.last.style, isNull);
+        expect(
+          watermark.style!.color,
+          brightness == Brightness.dark
+              ? const Color(0x14ffffff)
+              : const Color(0x0c000000),
+        );
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
   for (final width in [900.0, 1440.0]) {
     testWidgets(
       'grid arrows follow cells and reveal selection at width $width',

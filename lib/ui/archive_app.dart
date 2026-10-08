@@ -3205,8 +3205,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 alignment: Alignment.bottomRight,
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
-                  child: Text(
-                    'HiZip',
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: 'Hi',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        const TextSpan(text: 'Zip'),
+                      ],
+                    ),
+                    key: const ValueKey('workspace-watermark'),
                     textScaler: TextScaler.noScaling,
                     style: TextStyle(
                       fontSize: (constraints.maxWidth * .25).clamp(48.0, 144.0),
