@@ -3,6 +3,7 @@ import FlutterMacOS
 import Quartz
 import UniformTypeIdentifiers
 import CoreServices
+import FinderSync
 
 // Quick Look discovers its controller through the host window's responder chain.
 open class HizipPreviewWindow: NSWindow {
@@ -83,9 +84,9 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
   private var dragArmed = false
   private var dragInProgress = false
   private var menuBusy = false, menuHasDocument = false
-  private var menuWritable = false, menuHasSelection = false
-  private var menuEncoding = "auto"
-  private var encodingMenu: NSMenu?
+  private var menuTextEditing = false
+  private var menuDefinitions: [[String: Any]] = []
+  private var menuEnabled: [String: Bool] = [:]
   private var recentMenu: NSMenu?
   private var nameAlert: NSAlert?
 
@@ -96,13 +97,24 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     menuSources[text] ?? text
   }
   private func localized(_ text: String) -> String {
-    let source = sourceTitle(text)
+    let source = sourceTitle(text.replacingOccurrences(of: "APP_NAME", with: "HiZip"))
     if let translated = menuTranslations[source] {
       menuSources[translated] = source
       return translated
     }
     let titles = ["新建文件夹…": "New Folder…", "新建空白文档…": "New Blank Document…", "删除…": "Delete…", "名称": "Name", "创建": "Create", "取消": "Cancel", "设置…": "Settings…", "文件": "File", "打开…": "Open…", "最近打开": "Open Recent", "暂无最近打开的文件": "No Recent Files", "清除菜单": "Clear Menu", "创建 ZIP…": "Create ZIP…", "创建压缩包": "Create Archive", "解压…": "Extract…", "编码": "Encoding", "自动识别": "Auto Detect", "简体中文（GB18030 / GBK）": "Chinese Simplified (GB18030 / GBK)", "繁体中文（Big5）": "Chinese Traditional (Big5)", "日文（Shift-JIS）": "Japanese (Shift-JIS)", "韩文（CP949）": "Korean (CP949)", "西欧（Windows-1252）": "Western European (Windows-1252)", "关闭窗口": "Close Window", "关闭标签页": "Close Tab", "显示": "View", "列表视图": "List View", "图标视图": "Icon View", "多栏视图": "Column View", "画廊视图": "Gallery View", "预览栏": "Preview Pane", "编辑": "Edit", "撤销": "Undo", "重做": "Redo", "剪切": "Cut", "复制": "Copy", "粘贴": "Paste", "全选": "Select All", "窗口": "Window", "最小化": "Minimize", "缩放": "Zoom", "全部置于最前": "Bring All to Front", "帮助": "Help"]
     return menuLanguage == "en" ? (titles[text] ?? text) : (titles.first(where: { $0.value == text })?.key ?? text)
+  }
+  private func localizeMenu(_ menu: NSMenu) {
+    for item in menu.items where !item.isSeparatorItem {
+      let source = sourceTitle(item.title)
+      item.title = localized(item.title)
+      if let submenu = item.submenu {
+        submenu.title = item.title
+        // Services are supplied by other apps and use their own localization.
+        if source != "服务" && source != "Services" { localizeMenu(submenu) }
+      }
+    }
   }
   private func menuItem(_ title: String, _ command: String, key: String = "") -> NSMenuItem {
     let item = NSMenuItem(title: localized(title), action: #selector(menuCommand(_:)), keyEquivalent: key)
@@ -124,8 +136,8 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
   }
   @objc private func editCommand(_ sender: NSMenuItem) {
     guard let command = sender.representedObject as? String else { return }
-    if let host = NSApp.keyWindow as? HizipPreviewWindow, host.fileCommandsEnabled {
-      if !menuBusy { channel.invokeMethod("fileCommand", arguments: command) }
+    if NSApp.keyWindow === viewController?.view.window && !menuTextEditing {
+      if menuEnabled[command] == true { channel.invokeMethod("fileCommand", arguments: command) }
     } else {
       NSApp.sendAction(NSSelectorFromString("\(command):"), to: nil, from: sender)
     }
@@ -135,20 +147,21 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
       if nameAlert != nil { return true }
       let closesTab = NSApp.keyWindow === viewController?.view.window && menuHasDocument
       item.title = localized(closesTab ? "关闭标签页" : "关闭窗口")
-      return !closesTab || !menuBusy
+      return !closesTab || menuEnabled["closeArchive"] == true
     }
     guard let command = item.representedObject as? String else { return true }
-    if command == "settings" || command == "clearRecent" { return true }
-    if ["newFolder", "newDocument", "delete"].contains(command) {
-      if command == "delete", let host = NSApp.keyWindow as? HizipPreviewWindow,
-         !host.fileCommandsEnabled { return false }
-      return NSApp.keyWindow === viewController?.view.window && !menuBusy && menuHasDocument && menuWritable && (command != "delete" || menuHasSelection)
+    if command == "settings" { return true }
+    let textFocus = NSApp.keyWindow !== viewController?.view.window || menuTextEditing
+    if ["undo", "redo", "cut", "copy", "paste", "selectAll"].contains(command) && textFocus {
+      return NSApp.target(forAction: NSSelectorFromString("\(command):")) != nil
     }
-    if command.hasPrefix("encoding:") { return !menuBusy && menuHasDocument }
-    if ["extract", "closeArchive", "list", "grid", "columns", "gallery", "inspector"].contains(command) {
-      return !menuBusy && menuHasDocument
-    }
-    return !menuBusy
+    // Auxiliary windows have their own text focus. Never apply their commands
+    // to the archive selection left behind in the main window.
+    guard NSApp.keyWindow === viewController?.view.window,
+          viewController?.view.window?.attachedSheet == nil else { return false }
+    if ["undo", "redo", "cut"].contains(command) { return false }
+    if command.hasPrefix("recent:") { return !menuBusy }
+    return menuEnabled[command] ?? false
   }
   @objc private func closeCurrent(_ sender: Any?) {
     if let alert = nameAlert, let parent = alert.window.sheetParent,
@@ -176,6 +189,46 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     menu.addItem(.separator())
     menu.addItem(menuItem("清除菜单", "clearRecent"))
   }
+  private func applicationMenu(_ title: String, _ definitions: [[String: Any]]) -> NSMenu {
+    let menu = NSMenu(title: localized(title))
+    for definition in definitions {
+      if definition["separator"] as? Bool == true {
+        menu.addItem(.separator())
+        continue
+      }
+      let title = definition["title"] as? String ?? ""
+      let command = definition["command"] as? String
+      let item: NSMenuItem
+      if let children = definition["children"] as? [[String: Any]] {
+        item = NSMenuItem(title: localized(title), action: nil, keyEquivalent: "")
+        item.submenu = applicationMenu(title, children)
+        if title == "最近打开" { recentMenu = item.submenu }
+      } else if let command = command {
+        let rawKey = definition["key"] as? String ?? ""
+        let key = rawKey == "↓" ? String(UnicodeScalar(NSDownArrowFunctionKey)!) :
+          rawKey == "↑" ? String(UnicodeScalar(NSUpArrowFunctionKey)!) : rawKey
+        item = menuItem(title, command, key: key)
+        let modifiers = definition["modifiers"] as? [String] ?? ["command"]
+        item.keyEquivalentModifierMask = []
+        if modifiers.contains("command") { item.keyEquivalentModifierMask.insert(.command) }
+        if modifiers.contains("shift") { item.keyEquivalentModifierMask.insert(.shift) }
+        if modifiers.contains("option") { item.keyEquivalentModifierMask.insert(.option) }
+        if modifiers.contains("control") { item.keyEquivalentModifierMask.insert(.control) }
+        if ["undo", "redo", "cut", "copy", "paste", "selectAll"].contains(command) {
+          item.action = #selector(editCommand(_:))
+        }
+        if command == "closeArchive" { item.action = #selector(closeCurrent(_:)) }
+        menuEnabled[command] = definition["enabled"] as? Bool ?? true
+      } else {
+        item = NSMenuItem(title: localized(title), action: nil, keyEquivalent: "")
+      }
+      item.isEnabled = definition["enabled"] as? Bool ?? true
+      item.state = definition["checked"] as? Bool == true ? .on : .off
+      menu.addItem(item)
+    }
+    return menu
+  }
+
   private func configureMenus() {
     guard let main = NSApp.mainMenu else { return }
     menusConfigured = true
@@ -186,69 +239,26 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
       settings.action = #selector(menuCommand(_:))
       settings.representedObject = "settings"
     }
-    if let old = main.items.first(where: { sourceTitle($0.title) == "文件" || $0.title == "File" }) { main.removeItem(old) }
-    let fileMenu = NSMenu(title: localized("文件"))
-    fileMenu.addItem(menuItem("打开…", "open", key: "o"))
-    let recent = NSMenuItem(title: localized("最近打开"), action: nil, keyEquivalent: "")
-    recentMenu = NSMenu(title: localized("最近打开"))
-    recent.submenu = recentMenu
-    fileMenu.addItem(recent)
-    rebuildRecentMenu()
-    fileMenu.addItem(.separator())
-    let create = menuItem("创建 ZIP…", "create", key: "n")
-    let createFormats = NSMenu(title: localized("创建压缩包"))
-    for (ext, title) in [("zip", "ZIP"), ("7z", "7z"), ("tar", "TAR"), ("tar.gz", "TAR + gzip"), ("tar.bz2", "TAR + bzip2"), ("tar.xz", "TAR + xz"), ("tar.lzma", "TAR + LZMA"), ("cpio", "CPIO"), ("gz", "gzip"), ("bz2", "bzip2"), ("xz", "xz"), ("lzma", "LZMA")] {
-      createFormats.addItem(menuItem(title, "create:\(ext)"))
+    let managed = ["文件", "编辑", "显示", "前往", "帮助", "File", "Edit", "View", "Go", "Help"]
+    for old in main.items where managed.contains(sourceTitle(old.title)) {
+      main.removeItem(old)
     }
-    let formats = NSMenuItem(title: localized("创建压缩包"), action: nil, keyEquivalent: "")
-    formats.submenu = createFormats
-    fileMenu.addItem(create)
-    fileMenu.addItem(formats)
-    fileMenu.addItem(menuItem("解压…", "extract", key: "e"))
-    fileMenu.addItem(.separator())
-    let newFolder = menuItem("新建文件夹…", "newFolder", key: "n")
-    newFolder.keyEquivalentModifierMask = [.command, .shift]
-    fileMenu.addItem(newFolder)
-    fileMenu.addItem(menuItem("新建空白文档…", "newDocument"))
-    fileMenu.addItem(menuItem("删除…", "delete", key: "\u{8}"))
-    fileMenu.addItem(.separator())
-    let encodingItem = NSMenuItem(title: localized("编码"), action: nil, keyEquivalent: "")
-    encodingMenu = NSMenu(title: localized("编码"))
-    for (code, title) in [("auto", "自动识别"), ("UTF-8", "UTF-8"), ("GB18030", "简体中文（GB18030 / GBK）"), ("BIG5", "繁体中文（Big5）"), ("CP932", "日文（Shift-JIS）"), ("CP949", "韩文（CP949）"), ("CP437", "DOS（CP437）"), ("WINDOWS-1252", "西欧（Windows-1252）")] {
-      let item = menuItem(title, "encoding:\(code)")
-      item.state = code == menuEncoding ? .on : .off
-      encodingMenu?.addItem(item)
-    }
-    encodingItem.submenu = encodingMenu
-    fileMenu.addItem(encodingItem)
-    fileMenu.addItem(.separator())
-    let close = NSMenuItem(title: localized("关闭窗口"), action: #selector(closeCurrent(_:)), keyEquivalent: "w")
-    close.target = self
-    fileMenu.addItem(close)
-    let file = NSMenuItem(title: localized("文件"), action: nil, keyEquivalent: "")
-    file.submenu = fileMenu
-    main.insertItem(file, at: min(1, main.numberOfItems))
-    if let edit = main.items.first(where: { sourceTitle($0.title) == "编辑" || $0.title == "Edit" })?.submenu {
-      for item in edit.items {
-        guard let action = item.action else { continue }
-        let command = NSStringFromSelector(action).replacingOccurrences(of: ":", with: "")
-        if ["copy", "paste", "selectAll"].contains(command) {
-          item.target = self
-          item.action = #selector(editCommand(_:))
-          item.representedObject = command
-        }
+    menuEnabled.removeAll()
+    recentMenu = nil
+    for (index, definition) in menuDefinitions.enumerated() {
+      let title = definition["title"] as? String ?? ""
+      let children = definition["children"] as? [[String: Any]] ?? []
+      let menu = applicationMenu(title, children)
+      if title == "显示" {
+        menu.addItem(.separator())
+        let fullScreen = NSMenuItem(title: localized("进入全屏"),
+          action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        menu.addItem(fullScreen)
       }
-    }
-    if let viewItem = main.items.first(where: { sourceTitle($0.title) == "显示" || $0.title == "View" }), let view = viewItem.submenu {
-      viewItem.title = localized("显示")
-      view.title = localized("显示")
-      for command in [("列表视图", "list"), ("图标视图", "grid"), ("多栏视图", "columns"), ("画廊视图", "gallery"), ("预览栏", "inspector")] {
-        if let existing = view.items.first(where: { $0.representedObject as? String == command.1 }) {
-          existing.title = localized(command.0)
-        } else {
-          view.insertItem(menuItem(command.0, command.1), at: 0)
-        }
-      }
+      let item = NSMenuItem(title: localized(title), action: nil, keyEquivalent: "")
+      item.submenu = menu
+      main.insertItem(item, at: min(index + 1, main.numberOfItems))
     }
   }
 
@@ -337,6 +347,40 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     return info
   }
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "selectCompressionContents" {
+      let args = call.arguments as? [String: Any] ?? [:]
+      let panel = NSOpenPanel()
+      panel.canChooseFiles = args["foldersOnly"] as? Bool != true
+      panel.canChooseDirectories = true
+      panel.allowsMultipleSelection = true
+      panel.prompt = args["prompt"] as? String
+      guard let window = viewController?.view.window else { result([]); return }
+      panel.beginSheetModal(for: window) { response in
+        result(response == .OK ? panel.urls.map { $0.path } : [])
+      }
+      return
+    }
+    if call.method == "authorizeFileAccess" {
+      guard let args = call.arguments as? [String: Any],
+        let reads = args["readPaths"] as? [String],
+        let writes = args["writeDirectories"] as? [String],
+        reads.count + writes.count <= 20000,
+        (reads + writes).allSatisfy({ $0.hasPrefix("/") && !$0.contains("\0") }),
+        let message = args["message"] as? String, let prompt = args["prompt"] as? String,
+        let chooseMessage = args["chooseMessage"] as? String,
+        let failureMessage = args["failureMessage"] as? String else {
+        result(FlutterError(code: "arguments", message: "Invalid file access request", details: nil)); return
+      }
+      SandboxFileAccess.shared.ensure(readPaths: reads, writeDirectories: writes,
+        window: viewController?.view.window, message: message, prompt: prompt,
+        chooseMessage: chooseMessage, failureMessage: failureMessage) { outcome in
+        switch outcome {
+        case .success(let allowed): result(allowed)
+        case .failure(let error): result(FlutterError(code: "file_access", message: error.localizedDescription, details: nil))
+        }
+      }
+      return
+    }
     if call.method == "setDefaultArchiveHandler" {
       guard let identifier = Bundle.main.bundleIdentifier else {
         result(FlutterError(code: "bundle_id", message: "Application identifier is unavailable", details: nil)); return
@@ -361,6 +405,10 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
       NotificationCenter.default.post(name: Notification.Name("HiZipArchiveListenerReady"), object: nil)
       result(Array(NSDocumentController.shared.recentDocumentURLs.prefix(10)).map { $0.path }); return
     }
+    if call.method == "showFinderExtensionSettings" {
+      FIFinderSyncController.showExtensionManagementInterface()
+      result(nil); return
+    }
     if call.method == "promptEntryName", let args = call.arguments as? [String: Any] {
       guard let window = viewController?.view.window else { result(nil); return }
       let alert = NSAlert()
@@ -383,13 +431,9 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     if call.method == "menuState", let args = call.arguments as? [String: Any] {
       menuBusy = args["busy"] as? Bool ?? false
       menuHasDocument = args["hasDocument"] as? Bool ?? false
-      menuWritable = args["writable"] as? Bool ?? false
-      menuHasSelection = args["hasSelection"] as? Bool ?? false
-      let encoding = args["encoding"] as? String ?? "auto"
-      menuEncoding = encoding
-      for item in encodingMenu?.items ?? [] {
-        item.state = item.representedObject as? String == "encoding:\(encoding)" ? .on : .off
-      }
+      menuTextEditing = args["textEditing"] as? Bool ?? false
+      menuDefinitions = args["menus"] as? [[String: Any]] ?? []
+      configureMenus()
       result(nil); return
     }
     if call.method == "noteRecentArchive", let args = call.arguments as? [String: Any], let path = args["path"] as? String {
@@ -409,10 +453,10 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
         if menusConfigured { configureMenus() }
       }
       for root in NSApp.mainMenu?.items ?? [] {
-        if ["编辑", "窗口", "帮助", "Edit", "Window", "Help"].contains(sourceTitle(root.title)) {
+        if root == NSApp.mainMenu?.items.first || ["编辑", "窗口", "帮助", "显示", "Edit", "Window", "Help", "View"].contains(sourceTitle(root.title)) {
           root.title = localized(root.title)
           root.submenu?.title = root.title
-          for item in root.submenu?.items ?? [] { item.title = localized(item.title) }
+          if let submenu = root.submenu { localizeMenu(submenu) }
         }
       }
       result(nil); return

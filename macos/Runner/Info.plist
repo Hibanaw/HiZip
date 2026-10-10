@@ -28,6 +28,12 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>com.hibanaw.hizip.finder</string>
+		<key>CFBundleURLSchemes</key><array><string>hizip</string></array>
+		<key>CFBundleTypeRole</key><string>Editor</string>
+	</dict></array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

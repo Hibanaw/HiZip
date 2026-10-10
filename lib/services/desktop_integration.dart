@@ -1,10 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 
-import 'linux_file_association_stub.dart'
-    if (dart.library.io) 'linux_file_association_io.dart'
-    as linux;
+import 'dart:convert';
+
+import '../models/application_menu.dart';
+import '../models/finder_compression_request.dart';
+
+import 'linux_file_association_io.dart' as linux;
 
 class DefaultApplication {
   const DefaultApplication(this.name, this.icon);
@@ -23,23 +27,19 @@ class FileApplication extends DefaultApplication {
   final bool isDefault;
 }
 
-/// Native desktop APIs stay separate from archive algorithms and the web
-/// implementation. Missing platform support leaves the regular Flutter UI usable.
+/// Native desktop APIs stay separate from archive algorithms.
+/// Missing platform support leaves the regular Flutter UI usable.
 class DesktopIntegration {
   bool? lastDragSucceeded;
   static const channel = MethodChannel('dev.hizip/native_files');
-  bool get supportsMenuBar =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
-  bool get supportsQuickLook =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+  bool get supportsMenuBar => defaultTargetPlatform == TargetPlatform.macOS;
+  bool get supportsQuickLook => defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsFileIntegration =>
-      !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
-          defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux);
   bool get supportsDefaultApplication =>
-      !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
-          defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux);
   final _icons = <String, Future<Uint8List?>>{};
   final _applications = <String, Future<DefaultApplication?>>{};
   final _handlers = <String, Future<List<FileApplication>>>{};
@@ -82,11 +82,33 @@ class DesktopIntegration {
   Future<void> openWith(String path, FileApplication app) => channel
       .invokeMethod<void>('openWith', {'path': path, 'application': app.path});
 
+  Future<List<String>> selectCompressionContents({
+    bool foldersOnly = false,
+  }) async {
+    final prompt = _translations['选择'] ?? '选择';
+    if (defaultTargetPlatform == TargetPlatform.macOS) {
+      return await channel.invokeListMethod<String>(
+            'selectCompressionContents',
+            {'foldersOnly': foldersOnly, 'prompt': prompt},
+          ) ??
+          [];
+    }
+    if (foldersOnly) {
+      return (await getDirectoryPaths(confirmButtonText: prompt))
+          .whereType<String>()
+          .toList();
+    }
+    return (await openFiles(confirmButtonText: prompt))
+        .map((file) => file.path)
+        .toList();
+  }
+
   void listen({
     required void Function(int) navigate,
     Future<void> Function()? prepareClose,
     void Function(String)? command,
     void Function(String)? openArchive,
+    Future<void> Function(FinderCompressionRequest)? compressFiles,
     VoidCallback? clearRecent,
     VoidCallback? dragEnded,
     VoidCallback? dragStarted,
@@ -101,6 +123,11 @@ class DesktopIntegration {
       if (call.method == 'fileCommand') command?.call(call.arguments as String);
       if (call.method == 'openArchive') {
         openArchive?.call(call.arguments as String);
+      }
+      if (call.method == 'compressFiles') {
+        await compressFiles?.call(
+          FinderCompressionRequest.fromPlatform(call.arguments),
+        );
       }
       if (call.method == 'clearRecent') clearRecent?.call();
       if (call.method == 'fileDragEnded') {
@@ -139,10 +166,35 @@ class DesktopIntegration {
     if (supportsQuickLook) {
       return await channel.invokeMethod<int>('setDefaultArchiveHandler') ?? 0;
     }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+    if (defaultTargetPlatform == TargetPlatform.linux) {
       return linux.setDefaultArchiveHandler();
     }
     throw UnsupportedError('当前平台不支持设置默认打开方式');
+  }
+
+  Future<void> showFinderExtensionSettings() =>
+      channel.invokeMethod<void>('showFinderExtensionSettings');
+
+  Future<bool> authorizeFileAccess({
+    List<String> readPaths = const [],
+    List<String> writeDirectories = const [],
+  }) async {
+    if (!supportsQuickLook) return true;
+    String text(String source) => _translations[source] ?? source;
+    try {
+      return await channel.invokeMethod<bool>('authorizeFileAccess', {
+            'readPaths': readPaths,
+            'writeDirectories': writeDirectories,
+            'message': text('HiZip 需要访问此目录中的文件，并在此创建或安全更新压缩包。授权会被记住。'),
+            'prompt': text('授权此目录'),
+            'chooseMessage': text('请选择所需目录或包含它的上级目录。'),
+            'failureMessage': text('无法访问所选目录，请检查权限后重试。'),
+          }) ??
+          true;
+    } on MissingPluginException {
+      // Headless tests and older native hosts have no permission broker.
+      return true;
+    }
   }
 
   Future<List<String>> initialArchivePaths() => linux.initialArchivePaths();
@@ -157,11 +209,13 @@ class DesktopIntegration {
   }
 
   String? _language;
+  Map<String, String> _translations = const {};
   Future<void> setLanguage(
     String language, {
     Map<String, String> translations = const {},
     Map<String, String> english = const {},
   }) async {
+    _translations = translations;
     if (!supportsQuickLook || _language == language) return;
     _language = language;
     try {
@@ -199,9 +253,20 @@ class DesktopIntegration {
     String encoding = 'auto',
     bool writable = false,
     bool hasSelection = false,
+    bool textEditing = false,
+    List<ApplicationMenuItem> menus = const [],
   }) async {
     if (!supportsQuickLook) return;
-    final state = '$busy:$hasDocument:$encoding:$writable:$hasSelection';
+    final menuData = menus.map((menu) => menu.toJson()).toList();
+    final state = jsonEncode([
+      busy,
+      hasDocument,
+      encoding,
+      writable,
+      hasSelection,
+      textEditing,
+      menuData,
+    ]);
     if (_menuState == state) return;
     _menuState = state;
     try {
@@ -211,6 +276,8 @@ class DesktopIntegration {
         'encoding': encoding,
         'writable': writable,
         'hasSelection': hasSelection,
+        'textEditing': textEditing,
+        'menus': menuData,
       });
     } on MissingPluginException {
       /* Not installed on this target. */

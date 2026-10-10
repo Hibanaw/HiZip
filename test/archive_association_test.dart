@@ -71,5 +71,6 @@ void main() {
     );
     expect(button.onPressed, isNotNull);
     await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
   });
 }

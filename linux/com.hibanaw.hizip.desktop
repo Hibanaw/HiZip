@@ -1,6 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=HiZip
+Icon=com.hibanaw.hizip
 Comment=Archive manager
 Exec=hizip %F
 TryExec=hizip

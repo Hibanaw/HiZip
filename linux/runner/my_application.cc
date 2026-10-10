@@ -18,6 +18,7 @@ struct _MyApplication {
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+static GtkWindow* main_archive_window = nullptr;
 
 static std::string argument_string(FlMethodCall* call, const gchar* key) {
   FlValue* args = fl_method_call_get_args(call);
@@ -150,7 +151,12 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 static gboolean hide_auxiliary_window_on_delete(GtkWidget* widget,
                                                 GdkEvent* event,
                                                 gpointer user_data) {
-  gtk_widget_hide(widget);
+  auto* channel = static_cast<FlMethodChannel*>(g_object_get_data(G_OBJECT(widget), "hizip-modal-channel"));
+  if (channel) {
+    fl_method_channel_invoke_method(channel, "closeRequested", nullptr, nullptr, nullptr, nullptr);
+  } else {
+    gtk_widget_hide(widget);
+  }
   return TRUE;
 }
 
@@ -159,6 +165,16 @@ static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+
+  // Resolve bundled icons relative to the executable, including portable builds.
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", nullptr);
+  if (executable) {
+    g_autofree gchar* directory = g_path_get_dirname(executable);
+    g_autofree gchar* icons = g_build_filename(directory, "share", "icons", nullptr);
+    gtk_icon_theme_append_search_path(gtk_icon_theme_get_default(), icons);
+  }
+  gtk_window_set_default_icon_name(APPLICATION_ID);
+  gtk_window_set_icon_name(window, APPLICATION_ID);
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
@@ -188,6 +204,7 @@ static void my_application_activate(GApplication* application) {
   }
 
   gtk_window_set_default_size(window, 1280, 720);
+  main_archive_window = window;
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
@@ -232,11 +249,25 @@ static void my_application_activate(GApplication* application) {
     auto* codec = fl_standard_method_codec_new();
     auto* channel = fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
       "dev.hizip/task-window-host", FL_METHOD_CODEC(codec));
-    fl_method_channel_set_method_call_handler(channel, [](FlMethodChannel*, FlMethodCall* call, gpointer data) {
+    fl_method_channel_set_method_call_handler(channel, [](FlMethodChannel* channel, FlMethodCall* call, gpointer data) {
       auto* host = gtk_widget_get_toplevel(GTK_WIDGET(data));
-      auto* value = fl_value_new_int(reinterpret_cast<intptr_t>(host));
-      fl_method_call_respond_success(call, value, nullptr);
-      fl_value_unref(value);
+      const auto* method = fl_method_call_get_name(call);
+      if (std::strcmp(method, "nativePointer") == 0) {
+        auto* value = fl_value_new_int(reinterpret_cast<intptr_t>(host));
+        fl_method_call_respond_success(call, value, nullptr);
+        fl_value_unref(value);
+      } else if (std::strcmp(method, "beginModal") == 0) {
+        gtk_window_set_transient_for(GTK_WINDOW(host), main_archive_window);
+        gtk_window_set_modal(GTK_WINDOW(host), TRUE);
+        g_object_set_data_full(G_OBJECT(host), "hizip-modal-channel", g_object_ref(channel), g_object_unref);
+        fl_method_call_respond_success(call, nullptr, nullptr);
+      } else if (std::strcmp(method, "endModal") == 0) {
+        gtk_window_set_modal(GTK_WINDOW(host), FALSE);
+        g_object_set_data(G_OBJECT(host), "hizip-modal-channel", nullptr);
+        fl_method_call_respond_success(call, nullptr, nullptr);
+      } else {
+        fl_method_call_respond_not_implemented(call, nullptr);
+      }
     }, child_view, nullptr);
     g_object_unref(codec);
     g_object_unref(channel);
