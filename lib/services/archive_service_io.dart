@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -8,16 +9,21 @@ import 'package:flutter/foundation.dart'
 
 import 'package:crypto/crypto.dart';
 import 'package:hizip_native/hizip_native.dart';
+import 'package:hizip_native/zip_metadata.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/archive_entry.dart';
+import '../models/archive_create_options.dart';
 import '../models/preview_limit.dart';
 import '../models/extraction_progress.dart';
 import '../models/archive_index.dart';
 import 'archive_worker.dart';
 import 'extraction_plan.dart';
+import 'extraction_transaction.dart';
+import 'archive_volumes.dart';
+import 'rar_volumes.dart';
 
 class ArchiveDocument {
   ArchiveDocument(
@@ -27,11 +33,22 @@ class ArchiveDocument {
     this.writable, {
     ArchiveIndex? index,
     this.encoding = 'auto',
+    this.password = '',
+    this.comment = '',
+    String? nativePath,
     String? resolvedEncoding,
-  }) : resolvedEncoding = resolvedEncoding ?? encoding,
+  }) : nativePath = nativePath ?? path,
+       resolvedEncoding = resolvedEncoding ?? encoding,
        index = index ?? ArchiveIndex(entries);
   final ArchiveIndex index;
-  final String path, format, encoding, resolvedEncoding;
+  final String path,
+      format,
+      encoding,
+      resolvedEncoding,
+      password,
+      comment,
+      nativePath;
+  bool get supportsComment => format.toUpperCase().startsWith('ZIP');
   final List<ArchiveEntry> entries;
   final bool writable;
 }
@@ -51,6 +68,7 @@ class OpenedArchiveFile {
   String hash, archiveHash;
   FileStat stat;
   bool pending = false, retained = false, discardOnClose = false;
+  bool readOnly = false;
 }
 
 class _ArchiveCache {
@@ -68,10 +86,10 @@ class ArchiveService {
   String readEncoding = 'auto', createEncoding = 'UTF-8';
   int compressionLevel = 6;
   final String? temporaryRoot;
-  bool get supported => true;
   Directory? _session;
   Future<Directory>? _creatingSession;
   final List<OpenedArchiveFile> _opened = [];
+  final _passwords = <String, String>{};
   final _archiveCaches = <String, _ArchiveCache>{};
   final _closingCaches = <String, Future<void>>{};
   final _clipboardExports = <String, List<String>>{};
@@ -111,6 +129,7 @@ class ArchiveService {
   );
 
   Future<void> _closeArchive(String archive) async {
+    _passwords.remove(archive);
     final cache = _archiveCaches[archive];
     if (cache == null) return;
     await Future.wait(
@@ -135,6 +154,18 @@ class ArchiveService {
     };
     for (final file
         in _opened.where((file) => file.archive == archive).toList()) {
+      if (file.readOnly && p.isWithin(directory.path, file.path)) {
+        // Unlock only our temporary copies for cleanup, including Windows
+        // where the read-only attribute prevents deleting a file.
+        await NativeArchive.withControlAddress(0, () async {
+          if (!Platform.isWindows && await File(file.path).parent.exists()) {
+            await NativeArchive.setReadOnly(p.dirname(file.path), false);
+          }
+          if (await File(file.path).exists()) {
+            await NativeArchive.setReadOnly(file.path, false);
+          }
+        });
+      }
       if (!p.isWithin(directory.path, file.path) ||
           !await File(file.path).exists()) {
         continue;
@@ -247,7 +278,79 @@ class ArchiveService {
   }
 
   Future<String> _digest(String path) => _runHashFile(path);
-  Future<ArchiveDocument> read(String path) => _readArchive(path, readEncoding);
+  Future<ArchiveDocument> read(String path) async {
+    if (RarVolumes.isRarPath(path)) path = await RarVolumes.resolveFirst(path);
+    if (ArchiveVolumes.isVolume(path)) {
+      final first = ArchiveVolumes.firstPath(path);
+      return _cached(first, (cache) async {
+        final directory = await cache.createTemp('volumes-');
+        try {
+          final joined = await ArchiveVolumes.join(first, directory);
+          final doc = await _readArchive(
+            joined,
+            readEncoding,
+            password: _passwords[first] ?? '',
+            logicalPath: first,
+            forceReadOnly: true,
+          );
+          if (!doc.entries.any((entry) => entry.encrypted)) {
+            await NativeArchive.verify(joined, encoding: doc.resolvedEncoding);
+          }
+          return doc;
+        } catch (_) {
+          await directory.delete(recursive: true);
+          rethrow;
+        }
+      });
+    }
+    return _readArchive(
+      path,
+      readEncoding,
+      password: _passwords[path] ?? '',
+      forceReadOnly: _opened.any((file) => file.path == path && file.readOnly),
+    );
+  }
+
+  Future<ArchiveDocument> readWithPassword(String path, String password) async {
+    if (RarVolumes.isRarPath(path)) path = await RarVolumes.resolveFirst(path);
+    if (ArchiveVolumes.isVolume(path)) {
+      final first = ArchiveVolumes.firstPath(path);
+      final doc = await read(first);
+      await NativeArchive.verify(
+        doc.nativePath,
+        encoding: doc.resolvedEncoding,
+        password: password,
+      );
+      final unlocked = await _readArchive(
+        doc.nativePath,
+        readEncoding,
+        password: password,
+        logicalPath: first,
+        forceReadOnly: true,
+      );
+      _passwords[first] = password;
+      return unlocked;
+    }
+    return _cached(path, (_) async {
+      await NativeArchive.verify(
+        path,
+        encoding: readEncoding,
+        password: password,
+      );
+      final doc = await _readArchive(
+        path,
+        readEncoding,
+        password: password,
+        forceReadOnly: _opened.any(
+          (file) => file.path == path && file.readOnly,
+        ),
+      );
+      _passwords[path] = password;
+      return doc;
+    });
+  }
+
+  Future<Map<String, dynamic>> capabilities() => NativeArchive.capabilities();
 
   Future<String> _temporary(
     ArchiveDocument doc,
@@ -263,11 +366,12 @@ class ArchiveService {
     final output = p.join(dir.path, e.name);
     try {
       await NativeArchive.extract(
-        doc.path,
+        doc.nativePath,
         e.path,
         output,
         limit: limit,
         encoding: doc.resolvedEncoding,
+        password: doc.password,
       );
       return output;
     } catch (_) {
@@ -308,6 +412,7 @@ class ArchiveService {
     return _preparing.putIfAbsent(
       key,
       () => _cached(doc.path, (cache) async {
+        String? preparedPath;
         try {
           _validate(entry);
           final existing = _opened
@@ -315,17 +420,41 @@ class ArchiveService {
               .firstOrNull;
           if (existing != null) return existing;
           final path = await _temporary(doc, entry, cache: cache);
-          final watched = OpenedArchiveFile(
-            doc.path,
-            entry.path,
-            path,
-            await _digest(path),
-            await _digest(doc.path),
-            await File(path).stat(),
-          )..encoding = doc.resolvedEncoding;
+          preparedPath = path;
+          if (!doc.writable) {
+            await NativeArchive.setReadOnly(path, true);
+            if (!Platform.isWindows) {
+              await NativeArchive.setReadOnly(p.dirname(path), true);
+            }
+          }
+          final watched =
+              OpenedArchiveFile(
+                  doc.path,
+                  entry.path,
+                  path,
+                  await _digest(path),
+                  await _digest(doc.nativePath),
+                  await File(path).stat(),
+                )
+                ..encoding = doc.resolvedEncoding
+                ..readOnly = !doc.writable;
           _opened.add(watched);
           return watched;
         } catch (_) {
+          final path = preparedPath;
+          if (path != null) {
+            await NativeArchive.withControlAddress(0, () async {
+              if (!Platform.isWindows && await File(path).parent.exists()) {
+                await NativeArchive.setReadOnly(p.dirname(path), false);
+              }
+              if (await File(path).exists()) {
+                await NativeArchive.setReadOnly(path, false);
+              }
+              if (await File(path).parent.exists()) {
+                await File(path).parent.delete(recursive: true);
+              }
+            });
+          }
           _preparing.remove(key);
           rethrow;
         }
@@ -346,7 +475,7 @@ class ArchiveService {
   Future<List<OpenedArchiveFile>> changes() async {
     final changed = <OpenedArchiveFile>[];
     for (final f in _opened) {
-      if (f.pending || !await File(f.path).exists()) continue;
+      if (f.readOnly || f.pending || !await File(f.path).exists()) continue;
       final stat = await File(f.path).stat();
       if (stat.modified != f.stat.modified || stat.size != f.stat.size) {
         final hash = await _digest(f.path);
@@ -369,6 +498,7 @@ class ArchiveService {
   Future<void> save(OpenedArchiveFile file) => _cached(file.archive, (
     cache,
   ) async {
+    if (file.readOnly) throw StateError('当前格式仅支持读取。请将文件另存到其他位置。');
     if (await _digest(file.archive) != file.archiveHash) {
       throw StateError('原压缩包已被其他程序修改。为避免覆盖，请保留临时文件并重新打开压缩包。');
     }
@@ -386,7 +516,8 @@ class ArchiveService {
         output,
         encoding: file.encoding,
       );
-      await _readArchive(output, 'auto'); // Verify headers before committing.
+      await _readArchive(output, 'auto');
+      await NativeArchive.verify(output); // Verify headers before committing.
       if (await _digest(file.archive) != file.archiveHash ||
           await _digest(file.path) != snapshot) {
         throw StateError('文件在保存过程中再次发生变化，请重试。');
@@ -439,6 +570,8 @@ class ArchiveService {
     LinkPolicy linkPolicy = LinkPolicy.keepAll,
     CaseConflictPolicy caseConflictPolicy = CaseConflictPolicy.rename,
     void Function(String)? notice,
+    ExtractionConflictPolicy conflictPolicy = ExtractionConflictPolicy.rename,
+    ExtractionConflictResolver? resolveConflict,
   }) async {
     final events = ReceivePort();
     var reported = -1;
@@ -471,10 +604,13 @@ class ArchiveService {
     final insensitive =
         _caseConflictsIn(_extractionScope(doc, selection)).isNotEmpty &&
         await _caseInsensitiveDirectory(Directory(destination));
+    final staging = await Directory(destination).createTemp('.hizip-extract-');
+    var retainRecovery = false;
     try {
+      final snapshot = await _digest(doc.nativePath);
       final result = await _runExtract(
         doc,
-        destination,
+        staging.path,
         selection,
         port,
         maxExtractionWorkers,
@@ -483,8 +619,27 @@ class ArchiveService {
         insensitive,
       );
       if (reported != result.$2) progress?.call(result.$2, result.$2);
-      return result.$1;
+      if (await _digest(doc.nativePath) != snapshot) {
+        throw StateError('Archive changed during extraction');
+      }
+      final placed = await publishExtraction(
+        staging,
+        destination,
+        conflictPolicy,
+        resolve: resolveConflict,
+      );
+      if (result.$1 == staging.path) return destination;
+      final actual = placed[result.$1];
+      if (actual == null) return destination;
+      final root = await Directory(destination).resolveSymbolicLinks();
+      return p.join(destination, p.relative(actual, from: root));
+    } on ExtractionRecoveryRequired {
+      retainRecovery = true;
+      rethrow;
     } finally {
+      if (!retainRecovery && await staging.exists()) {
+        await staging.delete(recursive: true);
+      }
       await subscription.cancel();
       events.close();
     }
@@ -514,6 +669,7 @@ class ArchiveService {
     String folder, {
     List<ArchiveEntry> moving = const [],
     String? expectedArchiveHash,
+    List<ArchiveEntry> commentSources = const [],
   }) => _cached(doc.path, (cache) async {
     if (!doc.writable) throw StateError('当前格式只支持读取，文件传入和内部移动需要可写入的未加密压缩包。');
     if (folder.isNotEmpty && !isSafeArchivePath(folder)) {
@@ -539,9 +695,14 @@ class ArchiveService {
         paths,
         targets,
         removed,
+        commentPaths: {
+          for (var i = 0; i < commentSources.length; i++)
+            commentSources[i].normalized: names[i],
+        },
         encoding: doc.resolvedEncoding,
       );
       await _readArchive(output, 'auto');
+      await NativeArchive.verify(output);
       if (await _digest(doc.path) != snapshot) {
         throw StateError('压缩包在传输过程中已被修改，请重试。');
       }
@@ -607,8 +768,123 @@ class ArchiveService {
       folder,
       moving: move ? roots : const [],
       expectedArchiveHash: snapshot,
+      commentSources: roots,
     );
   }
+
+  Future<Map<String, dynamic>> verify(ArchiveDocument doc) => _cached(
+    doc.path,
+    (_) => NativeArchive.verify(
+      doc.nativePath,
+      encoding: doc.resolvedEncoding,
+      password: doc.password,
+    ),
+  );
+
+  Future<ArchiveDocument> writeComment(
+    ArchiveDocument doc,
+    String comment, {
+    required String original,
+  }) => _cached(doc.path, (_) async {
+    if (!doc.supportsComment || !doc.writable) {
+      throw StateError('Archive comments require a writable ZIP archive');
+    }
+    if (utf8.encode(comment).length > 65535) {
+      throw StateError('ZIP comment exceeds 65535 UTF-8 bytes');
+    }
+    final snapshot = await _digest(doc.path);
+    final current = await _readArchive(doc.path, doc.encoding);
+    if (current.comment != original) {
+      throw StateError('Archive comment changed. Reopen the dialog.');
+    }
+    final staging = await NativeArchive.stagingDirectory(doc.path);
+    final output = p.join(staging.path, p.basename(doc.path));
+    try {
+      await File(doc.path).copy(output);
+      await _runWriteComment(output, comment);
+      await NativeArchive.verify(output, encoding: current.resolvedEncoding);
+      if (await _digest(doc.path) != snapshot) {
+        throw StateError('Archive changed during comment editing');
+      }
+      await NativeArchive.commit(output, doc.path);
+      final hash = await _digest(doc.path);
+      for (final opened in _opened.where((file) => file.archive == doc.path)) {
+        opened.archiveHash = hash;
+      }
+      return await _readArchive(doc.path, doc.encoding);
+    } finally {
+      await staging.delete(recursive: true);
+    }
+  });
+
+  Future<ArchiveDocument> renameEntry(
+    ArchiveDocument doc,
+    ArchiveEntry entry,
+    String name,
+  ) => _cached(doc.path, (cache) async {
+    if (!doc.writable) throw StateError('当前格式只支持读取。');
+    if (name.trim().isEmpty ||
+        name != name.trim() ||
+        name.contains('/') ||
+        !isSafeArchivePath(name)) {
+      throw StateError('请输入有效的名称，不能包含路径分隔符。');
+    }
+    final parent = p.posix.dirname(entry.normalized);
+    final target = parent == '.' ? name : '$parent/$name';
+    if (target == entry.normalized) return doc;
+    final snapshot = await _digest(doc.path);
+    final current = await _readArchive(doc.path, doc.encoding);
+    if (!current.index.byNormalized.containsKey(entry.normalized)) {
+      throw StateError('所选条目已变化，请重新打开压缩包。');
+    }
+    for (final item in current.entries) {
+      if (item.normalized == entry.normalized ||
+          item.normalized.startsWith('${entry.normalized}/')) {
+        continue;
+      }
+      final path = item.normalized.toLowerCase(),
+          destination = target.toLowerCase();
+      if (path == destination || path.startsWith('$destination/')) {
+        throw StateError('目标名称已存在。');
+      }
+    }
+    final staging = await NativeArchive.stagingDirectory(doc.path);
+    final output = p.join(staging.path, p.basename(doc.path));
+    try {
+      await NativeArchive.rename(
+        doc.path,
+        entry.normalized,
+        target,
+        output,
+        encoding: current.resolvedEncoding,
+      );
+      final updated = await _readArchive(output, 'auto');
+      await NativeArchive.verify(output);
+      if (!updated.entries.any(
+        (item) =>
+            item.normalized == target || item.normalized.startsWith('$target/'),
+      )) {
+        throw StateError('重命名结果校验失败。');
+      }
+      if (await _digest(doc.path) != snapshot) {
+        throw StateError('压缩包在操作过程中已变化，请重试。');
+      }
+      await NativeArchive.commit(output, doc.path);
+      final hash = await _digest(doc.path);
+      for (final opened in _opened.where((file) => file.archive == doc.path)) {
+        opened.archiveHash = hash;
+        if (opened.entry == entry.path ||
+            opened.entry.startsWith('${entry.normalized}/')) {
+          _preparing.remove('${doc.path}\u0000${opened.entry}');
+          opened.entry =
+              '$target${opened.entry.substring(entry.normalized.length)}';
+        }
+      }
+      return await _readArchive(doc.path, doc.encoding);
+    } finally {
+      if (await staging.exists()) await staging.delete(recursive: true);
+    }
+  });
 
   Future<ArchiveDocument> createEntry(
     ArchiveDocument doc,
@@ -685,6 +961,7 @@ class ArchiveService {
         encoding: current.resolvedEncoding,
       );
       await _readArchive(output, 'auto');
+      await NativeArchive.verify(output);
       if (await _digest(doc.path) != snapshot) {
         throw StateError('压缩包在删除过程中已被修改，请重试。');
       }
@@ -711,27 +988,131 @@ class ArchiveService {
     }
   });
 
-  Future<void> create(String output, List<String> files) async {
-    final encoding = createEncoding, level = compressionLevel;
-    final names = files.map(p.basename).toList();
+  Future<void> create(String output, List<String> files) => createWithOptions(
+    output,
+    files,
+    ArchiveCreateOptions(compressionLevel: compressionLevel),
+  );
+
+  Future<void> createWithOptions(
+    String output,
+    List<String> files,
+    ArchiveCreateOptions options,
+  ) async {
+    if (options.compressionLevel < 0 ||
+        options.compressionLevel > 9 ||
+        !['store', 'deflate'].contains(options.zipCompression) ||
+        !['none', 'aes256'].contains(options.encryption)) {
+      throw ArgumentError('Invalid archive options');
+    }
+    if (options.encrypted &&
+        (options.password.isEmpty ||
+            !output.toLowerCase().endsWith('.zip') ||
+            files.isEmpty)) {
+      throw StateError('加密压缩需要 ZIP 格式、密码和至少一个文件。');
+    }
+    if (!options.encrypted && options.password.isNotEmpty) {
+      throw StateError('设置密码时必须启用加密。');
+    }
+    if (!output.toLowerCase().endsWith('.zip') &&
+        options.zipCompression != 'deflate') {
+      throw StateError('ZIP 压缩算法仅适用于 ZIP 格式。');
+    }
+    if (options.volumeSize != 0 &&
+        (options.volumeSize < 65536 ||
+            !RegExp(r'\.(zip|7z)$', caseSensitive: false).hasMatch(output))) {
+      throw ArgumentError(
+        'Split volumes require ZIP or 7z and at least 64 KiB per volume',
+      );
+    }
+    if (options.comment.isNotEmpty && !output.toLowerCase().endsWith('.zip')) {
+      throw ArgumentError('Archive comments require ZIP format');
+    }
+    final encoding = createEncoding, level = options.compressionLevel;
+    final prefix = options.nestInFolder ? _archiveStem(output) : '';
+    if (options.nestInFolder && !isSafeArchivePath(prefix)) {
+      throw StateError('不安全的文件名。');
+    }
+    final names = files
+        .map(
+          (file) => options.nestInFolder
+              ? '$prefix/${p.basename(file)}'
+              : p.basename(file),
+        )
+        .toList();
     if (names.map((s) => s.toLowerCase()).toSet().length != names.length) {
       throw StateError('所选文件存在同名文件，请先重命名。');
     }
+    final (paths, targets) = await _inputFiles(files, names);
+    if (paths.any((path) => p.equals(p.absolute(path), p.absolute(output)))) {
+      throw StateError('不能将压缩包加入它自身。');
+    }
+    final inputHashes = await _runCaptureInputHashes(paths);
+    final originalOutput = await FileSystemEntity.type(
+      output,
+      followLinks: false,
+    );
+    if (!options.overwrite && originalOutput != FileSystemEntityType.notFound) {
+      throw StateError('目标名称已存在。');
+    }
+    if (originalOutput != FileSystemEntityType.notFound &&
+        originalOutput != FileSystemEntityType.file) {
+      throw StateError('Invalid archive output destination');
+    }
+    final outputHash = originalOutput == FileSystemEntityType.file
+        ? await _digest(output)
+        : null;
     final dir = await NativeArchive.stagingDirectory(output);
     final staged = p.join(dir.path, p.basename(output));
+    var retainRecovery = false;
     try {
-      final (paths, targets) = await _inputFiles(files, names);
       await NativeArchive.create(
         staged,
         paths,
         targets,
         encoding: encoding,
         compressionLevel: level,
+        password: options.password,
+        encryption: options.encryption,
+        zipCompression: options.zipCompression,
       );
-      await _readArchive(staged, encoding);
-      await NativeArchive.commit(staged, output);
+      final checked = await _readArchive(
+        staged,
+        encoding,
+        password: options.password,
+      );
+      if (options.encrypted &&
+          !checked.entries.any((entry) => entry.encrypted)) {
+        throw StateError('加密压缩需要至少一个普通文件。');
+      }
+      await NativeArchive.verify(
+        staged,
+        encoding: encoding,
+        password: options.password,
+      );
+      await _runCheckInputHashes(inputHashes);
+      if (options.comment.isNotEmpty) {
+        await _runWriteComment(staged, options.comment);
+      }
+      if (options.volumeSize > 0) {
+        await ArchiveVolumes.split(staged, output, dir, options.volumeSize);
+      } else if (outputHash == null) {
+        await NativeArchive.commitNew(staged, output);
+      } else {
+        if (await _digest(output) != outputHash) {
+          throw StateError('Archive output changed during creation');
+        }
+        await NativeArchive.commit(staged, output);
+      }
+      if (options.encrypted) {
+        _passwords[options.volumeSize > 0 ? '$output.001' : output] =
+            options.password;
+      }
+    } on ExtractionRecoveryRequired {
+      retainRecovery = true;
+      rethrow;
     } finally {
-      await dir.delete(recursive: true);
+      if (!retainRecovery) await dir.delete(recursive: true);
     }
   }
 
@@ -739,6 +1120,7 @@ class ArchiveService {
 
   Future<void> _dispose() async {
     _disposed = true;
+    _passwords.clear();
     try {
       await Future.wait(_archiveCaches.keys.toList().map(closeArchive));
       await updateClipboardExports(const []);
@@ -774,6 +1156,23 @@ Future<_ImportPlan> _runImportPlan(
   () => _prepareImport(current, doc, sources, folder, moving),
   name: 'hizip-import-plan',
 );
+Future<Map<String, String>> _runCaptureInputHashes(List<String> paths) =>
+    runArchiveWorker(() async {
+      final hashes = <String, String>{};
+      for (final path in paths) {
+        await NativeArchive.checkpoint();
+        if (await FileSystemEntity.isFile(path)) {
+          hashes[path] = await _hashFile(path);
+        }
+      }
+      return hashes;
+    }, name: 'hizip-input-snapshot');
+
+Future<void> _runWriteComment(String path, String text) => runArchiveWorker(
+  () => ZipMetadata.setComment(path, text),
+  name: 'hizip-comment',
+);
+
 Future<void> _runCheckInputHashes(Map<String, String> hashes) =>
     runArchiveWorker(
       () => _checkInputHashes(hashes),
@@ -781,25 +1180,47 @@ Future<void> _runCheckInputHashes(Map<String, String> hashes) =>
     );
 
 Future<String> _hashFile(String path) async =>
-    (await sha256.bind(File(path).openRead()).first).toString();
-Future<ArchiveDocument> _readArchive(String path, String encoding) =>
-    runArchiveWorker(
-      () => NativeArchive.listBlocking(
-        path,
-        (j) => ArchiveDocument(
-          path,
-          (j['entries'] as List)
-              .map((e) => ArchiveEntry.fromJson(e as Map<String, dynamic>))
-              .toList(),
-          j['format'] as String,
-          j['writable'] as bool,
-          encoding: encoding,
-          resolvedEncoding: j['encoding'] as String?,
-        ),
-        encoding: encoding,
-      ),
-      name: 'hizip-read-index',
-    );
+    (await sha256
+            .bind(
+              File(path).openRead().asyncMap((bytes) async {
+                await NativeArchive.checkpoint();
+                return bytes;
+              }),
+            )
+            .first)
+        .toString();
+Future<ArchiveDocument> _readArchive(
+  String path,
+  String encoding, {
+  String password = '',
+  String? logicalPath,
+  bool forceReadOnly = false,
+}) => runArchiveWorker(
+  () => NativeArchive.listBlocking(
+    path,
+    (j) => ArchiveDocument(
+      logicalPath ?? path,
+      (j['entries'] as List)
+          .map(
+            (e) => ArchiveEntry.fromJson(
+              e as Map<String, dynamic>,
+              unlocked: password.isNotEmpty,
+            ),
+          )
+          .toList(),
+      j['format'] as String,
+      !forceReadOnly && j['writable'] as bool,
+      nativePath: path,
+      encoding: encoding,
+      password: password,
+      resolvedEncoding: j['encoding'] as String?,
+      comment: j['comment'] as String? ?? '',
+    ),
+    encoding: encoding,
+    password: password,
+  ),
+  name: 'hizip-read-index',
+);
 
 class _ImportPlan {
   _ImportPlan(this.removed, this.names, this.paths, this.targets, this.hashes);
@@ -1178,7 +1599,7 @@ Future<(String, int)> _extractArchive(
       await Future.wait([
         for (var i = 0; i < batches.length; i++)
           _runExtractionBatch(
-            doc.path,
+            doc.nativePath,
             [for (final index in batches[i]) selected[index].path],
             [for (final index in batches[i]) outputs[index]],
             List.filled(batches[i].length, NativeArchive.unlimitedSize),
@@ -1186,6 +1607,7 @@ Future<(String, int)> _extractArchive(
             events.sendPort,
             i,
             doc.resolvedEncoding,
+            doc.password,
           ),
       ]);
     } finally {
@@ -1285,10 +1707,11 @@ Future<List<String>> _exportArchive(
           _validate(e);
           await File(output).parent.create(recursive: true);
           NativeArchive.extractBlocking(
-            doc.path,
+            doc.nativePath,
             e.path,
             output,
             encoding: doc.resolvedEncoding,
+            password: doc.password,
           );
         }
       }
@@ -1404,7 +1827,8 @@ Future<void> _runExtractionBatch(
   SendPort port,
   int shard,
   String encoding,
-) => Isolate.run(() {
+  String password,
+) => runArchiveWorker(() {
   final clock = Stopwatch()..start();
   var lastProgress = -100;
   NativeArchive.extractBatchBlocking(
@@ -1414,6 +1838,7 @@ Future<void> _runExtractionBatch(
     limits,
     totalLimit: totalLimit,
     encoding: encoding,
+    password: password,
     detailedProgress: (done, bytes, index, fileBytes, fileSize) {
       if (clock.elapsedMilliseconds - lastProgress >= 100 ||
           done == names.length) {
@@ -1422,4 +1847,4 @@ Future<void> _runExtractionBatch(
       }
     },
   );
-}, debugName: 'hizip-extract-$shard');
+}, name: 'hizip-extract-$shard');

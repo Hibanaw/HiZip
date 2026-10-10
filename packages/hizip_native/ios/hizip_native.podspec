@@ -18,12 +18,16 @@ A new Flutter FFI plugin project.
   # paths, so Classes contains a forwarder C file that relatively imports
   # `../src/*` so that the C sources can be shared among all target platforms.
   s.source           = { :path => '.' }
+  # Classes/Unrar contains forwarders for the upstream library units.
   s.source_files = 'Classes/**/*'
-  s.libraries = 'archive'
+  s.resource_bundles = { 'hizip_native_licenses' => ['Resources/*.txt'] }
+  s.libraries = 'archive', 'c++'
   s.dependency 'Flutter'
   s.platform = :ios, '13.0'
 
   # Flutter.framework does not contain a i386 slice.
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
+  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES',
+    'CLANG_CXX_LANGUAGE_STANDARD' => 'c++11',
+    'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited) RARDLL _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
 end

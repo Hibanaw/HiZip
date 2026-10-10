@@ -4,6 +4,8 @@ LIBRARY = os.environ.get('HIZIP_NATIVE_LIBRARY', '/tmp/libhizip_native.dylib')
 lib = ctypes.CDLL(LIBRARY)
 for name in ['hz_list', 'hz_extract', 'hz_replace', 'hz_create', 'hz_extract_batch', 'hz_extract_batch_detailed']:
     getattr(lib, name).restype = ctypes.c_void_p
+lib.hz_capabilities.restype = ctypes.c_void_p
+lib.hz_capabilities.argtypes = []
 lib.hz_list.argtypes = [ctypes.c_char_p]
 lib.hz_extract.argtypes = [ctypes.c_char_p] * 3 + [ctypes.c_int64]
 lib.hz_replace.argtypes = [ctypes.c_char_p] * 4
@@ -99,7 +101,10 @@ class NativeArchiveTests(unittest.TestCase):
                 paths = (ctypes.c_char_p * 1)(os.fsencode(source))
                 entry_name = b'test.txt' if ext == 'ar' else '资料/测试.txt'.encode()
                 names = (ctypes.c_char_p * 1)(entry_name)
-                self.assertTrue(call('hz_create', archive, paths, names, 1).get('ok'))
+                result = call('hz_create', archive, paths, names, 1)
+                if ext not in call('hz_capabilities')['writableFormats']:
+                    self.assertIn('error', result); self.assertFalse(archive.exists()); continue
+                self.assertTrue(result.get('ok'), result)
                 info = call('hz_list', archive); self.assertTrue(info.get('writable'), info)
                 output = self.root / ('extract-' + ext)
                 self.assertTrue(call('hz_extract', archive, entry_name, output, 1024).get('ok'))
@@ -121,7 +126,10 @@ class NativeArchiveTests(unittest.TestCase):
         for ext in ['gz', 'bz2', 'xz', 'lzma', 'zst', 'lz4', 'lzip', 'Z']:
             with self.subTest(format=ext):
                 archive = self.root / ('single.txt.' + ext)
-                self.assertTrue(call('hz_create', archive, paths, names, 1).get('ok'))
+                result = call('hz_create', archive, paths, names, 1)
+                if ext not in call('hz_capabilities')['writableFormats']:
+                    self.assertIn('error', result); self.assertFalse(archive.exists()); continue
+                self.assertTrue(result.get('ok'), result)
                 info = call('hz_list', archive)
                 self.assertTrue(info.get('writable'), info)
                 self.assertEqual(info['entries'][0]['path'], 'single.txt')

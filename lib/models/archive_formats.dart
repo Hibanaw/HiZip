@@ -1,6 +1,8 @@
 /// Shared by native file pickers, creation menus and drag-to-open handling.
 const readableArchiveExtensions = [
   'zip',
+  'zip.001',
+  '7z.001',
   '7z',
   'rar',
   'tar',
@@ -41,8 +43,17 @@ const readableArchiveExtensions = [
   'epub',
 ];
 
+final readableArchivePickerExtensions = [
+  ...readableArchiveExtensions,
+  for (final letter in ['r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'])
+    for (var number = 0; number < 100; number++)
+      '$letter${number.toString().padLeft(2, '0')}',
+];
+
 bool isReadableArchivePath(String path) {
   final lowerPath = path.toLowerCase();
+  if (RegExp(r'\.(zip|7z)\.\d{3,}$').hasMatch(lowerPath)) return true;
+  if (RegExp(r'\.[r-z]\d{2}$').hasMatch(lowerPath)) return true;
   return readableArchiveExtensions.any(
     (extension) => lowerPath.endsWith('.${extension.toLowerCase()}'),
   );

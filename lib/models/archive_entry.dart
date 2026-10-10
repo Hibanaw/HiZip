@@ -8,16 +8,21 @@ class ArchiveEntry {
     this.regular = true,
     this.safe = true,
     this.encrypted = false,
+    this.unlocked = false,
     this.linkTarget,
     this.modified,
   });
-  factory ArchiveEntry.fromJson(Map<String, dynamic> j) => ArchiveEntry(
+  factory ArchiveEntry.fromJson(
+    Map<String, dynamic> j, {
+    bool unlocked = false,
+  }) => ArchiveEntry(
     path: j['path'] as String,
     size: (j['size'] as num).toInt(),
     directory: j['directory'] as bool,
     regular: j['regular'] as bool,
     safe: j['safe'] as bool,
     encrypted: j['encrypted'] as bool,
+    unlocked: unlocked,
     linkTarget: j['link'] as String?,
     modified: (j['modified'] as num) > 0
         ? DateTime.fromMillisecondsSinceEpoch(
@@ -27,7 +32,7 @@ class ArchiveEntry {
   );
   final String path;
   final int size;
-  final bool directory, regular, safe, encrypted;
+  final bool directory, regular, safe, encrypted, unlocked;
   final String? linkTarget;
   final DateTime? modified;
   bool get isSymlink => linkTarget != null && !directory;
@@ -63,7 +68,8 @@ class ArchiveEntry {
         '.svg',
       ].contains(extension) ||
       name.toLowerCase() == 'readme';
-  bool get canExtract => safe && regular && !directory && !encrypted;
+  bool get canExtract =>
+      safe && regular && !directory && (!encrypted || unlocked);
 }
 
 List<ArchiveEntry> childrenOf(

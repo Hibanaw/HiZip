@@ -42,6 +42,15 @@ void main() {
         final source = File(p.join(root.path, '中文.txt'));
         await source.writeAsString('original');
         final archive = p.join(root.path, '中文.txt.$extension');
+        final capability = await service.capabilities();
+        if (!(capability['writableFormats'] as List).contains(extension)) {
+          await expectLater(
+            service.create(archive, [source.path]),
+            throwsStateError,
+          );
+          expect(await File(archive).exists(), false);
+          return;
+        }
         await service.create(archive, [source.path]);
         final doc = await service.read(archive);
         expect(doc.writable, isTrue);

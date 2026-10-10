@@ -1,3 +1,5 @@
+import 'package:hizip_native/hizip_native.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -105,19 +107,15 @@ void caseTests() {
       final service = ArchiveService(temporaryRoot: p.join(root.path, 'cache'));
       debugForceCaseInsensitive = true;
       try {
-        final src = Directory(p.join(root.path, 'src'))..createSync();
-        File(p.join(src.path, 'ipt_ECN.h')).writeAsStringSync('upper');
-        File(p.join(src.path, 'ipt_ecn.h')).writeAsStringSync('lower');
+        final upper = await File(p.join(root.path, 'upper.txt'))
+            .writeAsString('upper');
+        final lower = await File(p.join(root.path, 'lower.txt'))
+            .writeAsString('lower');
         final tar = p.join(root.path, 'c.tar');
-        expect(
-          (await Process.run('tar', [
-            'cf',
-            tar,
-            '-C',
-            root.path,
-            'src',
-          ])).exitCode,
-          0,
+        await NativeArchive.create(
+          tar,
+          [upper.path, lower.path],
+          ['src/ipt_ECN.h', 'src/ipt_ecn.h'],
         );
         final doc = await service.read(tar);
         final out = Directory(p.join(root.path, 'out'))..createSync();
