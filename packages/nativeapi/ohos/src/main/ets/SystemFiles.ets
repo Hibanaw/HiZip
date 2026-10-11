@@ -10,17 +10,24 @@ export class SystemFiles {
   constructor(context: common.UIAbilityContext) { this.context = context; }
 
   async icon(name: string, directory: boolean): Promise<Uint8Array> {
+    // getFileIcon supports file UTDs, not general.folder. Unknown UTDs can
+    // return the generic document icon rather than reporting an error.
+    if (directory) return this.resourceIcon(-1, 'ohos_ic_normal_white_grid_folder');
     const extension = name.substring(name.lastIndexOf('.')).toLowerCase();
-    const type = directory ? 'general.folder' : uniformTypeDescriptor.getUniformDataTypeByFilenameExtension(extension);
+    const type = uniformTypeDescriptor.getUniformDataTypeByFilenameExtension(extension);
     const resource = await fileManagerService.getFileIcon(type);
     if (typeof resource === 'string') {
       const encoded = resource.startsWith('data:') ? resource.substring(resource.indexOf(',') + 1) : resource;
       return new util.Base64Helper().decodeSync(encoded);
     }
-    const manager = resourceManager.getSysResourceManager();
     const symbolic = resource.params?.length ? resource.params[0] as string : '';
     const resourceName = symbolic.substring(symbolic.lastIndexOf('.') + 1);
-    const descriptor = resource.id > 0 ? manager.getDrawableDescriptor(resource.id)
+    return this.resourceIcon(resource.id, resourceName);
+  }
+
+  private async resourceIcon(id: number, resourceName: string): Promise<Uint8Array> {
+    const manager = resourceManager.getSysResourceManager();
+    const descriptor = id > 0 ? manager.getDrawableDescriptor(id)
       : manager.getDrawableDescriptorByName(resourceName);
     if (descriptor) {
       const packer = image.createImagePacker();
@@ -31,7 +38,7 @@ export class SystemFiles {
         await packer.release();
       }
     }
-    return resource.id > 0 ? manager.getMediaContent(resource.id) : manager.getMediaByName(resourceName);
+    return id > 0 ? manager.getMediaContent(id) : manager.getMediaByName(resourceName);
   }
 
   async open(uri: string, mimeType: string, writable: boolean, application: string): Promise<void> {
