@@ -35,6 +35,10 @@ migrate_working_dir/
 
 # Local HarmonyOS toolchain, dependency cache and smoke projects.
 /.toolchains/
+# Local HarmonyOS smoke-build outputs and machine signing configuration.
+/ohos/
+/packages/nativeapi/
+/output/sandbox-smoke/
 
 # Symbolication related
 app.*.symbols
