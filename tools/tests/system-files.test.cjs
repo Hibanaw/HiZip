@@ -10,6 +10,12 @@ const ts = require(path.join(root,
 const source = fs.readFileSync(path.join(root,
   'packages/nativeapi/ohos/src/main/ets/SystemFiles.ets'), 'utf8');
 const exportsObject = {};
+const iconTypes = [];
+const drawableNames = [];
+const packed = [];
+let releases = 0;
+const folderPixelMap = { name: 'folder' };
+const png = new Uint8Array([137, 80, 78, 71]);
 const fileUri = { getUriFromPath: value => `file://com.hibanaw.hizip${encodeURI(value)}` };
 vm.runInNewContext(ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
@@ -20,6 +26,28 @@ vm.runInNewContext(ts.transpileModule(source, {
       FLAG_AUTH_READ_URI_PERMISSION: 1, FLAG_AUTH_WRITE_URI_PERMISSION: 2,
     } } };
     if (name === '@kit.CoreFileKit') return { fileUri };
+    if (name === '@kit.ArkData') return { uniformTypeDescriptor: {
+      getUniformDataTypeByFilenameExtension: extension => {
+        assert.equal(extension, '.zip'); return 'general.zip-archive';
+      },
+    } };
+    if (name === '@kit.FileManagerServiceKit') return { fileManagerService: {
+      getFileIcon: async type => { iconTypes.push(type); return 'iVBORw=='; },
+    } };
+    if (name === '@kit.ArkTS') return { util: { Base64Helper: class {
+      decodeSync(value) { return new Uint8Array(Buffer.from(value, 'base64')); }
+    } } };
+    if (name === '@kit.LocalizationKit') return { resourceManager: {
+      getSysResourceManager: () => ({ getDrawableDescriptorByName: name => {
+        drawableNames.push(name); return { getPixelMap: () => folderPixelMap };
+      } }),
+    } };
+    if (name === '@kit.ImageKit') return { image: { createImagePacker: () => ({
+      packToData: async (map, options) => {
+        packed.push(map); assert.equal(options.format, 'image/png'); return png.buffer;
+      },
+      release: async () => { releases++; },
+    }) } };
     return {};
   },
 });
@@ -42,5 +70,13 @@ vm.runInNewContext(ts.transpileModule(source, {
   }
   await assert.rejects(systemFiles.open(uri, 'application/msword', true, 'another-app'));
   assert.equal(wants.length, 0);
-  console.log('SystemFiles: single document URI, filename/suffix, read/write flags and invalid application passed.');
+  assert.deepEqual(Array.from(await systemFiles.icon('archive.ZIP', false)), Array.from(png));
+  for (const name of ['folder', '中文.zip', '.hidden']) {
+    assert.deepEqual(Array.from(await systemFiles.icon(name, true)), Array.from(png));
+  }
+  assert.deepEqual(iconTypes, ['general.zip-archive']);
+  assert.deepEqual(drawableNames, Array(3).fill('ohos_ic_normal_white_grid_folder'));
+  assert.deepEqual(packed, Array(3).fill(folderPixelMap));
+  assert.equal(releases, 3);
+  console.log('SystemFiles: document URI permissions, file icons and system folder drawable passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

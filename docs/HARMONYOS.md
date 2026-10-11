@@ -34,7 +34,8 @@
   副本。异常退出时不自动删除可能包含未保存内容的私有编辑文件。
 - 声明归档 MIME 类型和单实例 Ability，接收系统冷启动及运行中的文件打开请求。
 - 文件图标使用 File Manager Service 的 `getFileIcon`，将 Base64 或系统命名资源
-  转为 PNG；接口失败时保留 Flutter 图标。
+  转为 PNG；文件夹直接读取系统 `ohos_ic_normal_white_grid_folder` 资源，不向
+  文件图标接口传入未列出的 `general.folder` 类型。接口失败时保留 Flutter 图标。
 
 系统 URI 与真实路径作为选择元数据保留，FFI 只读取沙箱工作副本。导出前检查路径、符号链接
 和已有目标；不会将未授权的用户路径直接传给 C 引擎。
@@ -106,6 +107,10 @@ node tools/tests/external-edits.test.cjs
 2026-10-11 在 MatePad Pro（HarmonyOS 6.1.1 / API 24）上通过沙箱 DOCX 的连续
 两次修改写回和清理测试，并通过 WPS 交互验收：第三方打开、修改保存、返回 HiZip
 后写回 ZIP，以及关闭归档后的编辑文件清理。
+
+同日通过 `integration_test/ohos_icon_test.dart` 的真机回归：系统文件夹图标与
+普通文件图标不同，带文件后缀的目录仍使用文件夹图标，文件夹、普通文件及 ZIP
+图标均能由 Flutter 正常解码。
 
 ## API 依据
 
