@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nativeapi/nativeapi.dart';
 import 'package:hizip/models/archive_entry.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/harmony_bridge.dart';
@@ -126,6 +127,51 @@ void main() {
           expect(calls.single.arguments, {
             'extensions': ['zip'],
           });
+        },
+      );
+
+      test(
+        'system picker retains real location and forwards its URI as the initial directory',
+        () async {
+          const root = '/data/storage/el2/base/files/imports/selected';
+          const uri = 'file://docs/storage/Users/currentUser/Documents';
+          respond((call) async {
+            if (call.method == 'directoryLocation') {
+              return {
+                'workingPath': root,
+                'uri': uri,
+                'displayPath': '/storage/Users/currentUser/Documents',
+                'writable': true,
+              };
+            }
+            return {
+              'workingPath': '$root/archive.zip',
+              'uri': '$uri/archive.zip',
+              'displayPath': '/storage/Users/currentUser/Documents/archive.zip',
+              'writable': true,
+            };
+          });
+          expect(await getDirectoryPath(), root);
+          final selected = await NativeDocuments.pickDirectoryLocation(
+            initialDirectory: root,
+          );
+          expect(selected!.workingPath, root);
+          expect(selected.uri, uri);
+          expect((calls.last.arguments as Map)['initialDirectory'], uri);
+          expect(
+            NativeDocuments.displayPath(root),
+            '/storage/Users/currentUser/Documents',
+          );
+          final saved = await getSaveLocation(
+            suggestedName: 'archive.zip',
+            initialDirectory: root,
+          );
+          expect(saved!.path, '$root/archive.zip');
+          expect(
+            NativeDocuments.displayPath(saved.path),
+            '/storage/Users/currentUser/Documents/archive.zip',
+          );
+          expect((calls.last.arguments as Map)['initialDirectory'], uri);
         },
       );
 

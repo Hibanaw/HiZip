@@ -72,6 +72,51 @@ void main() {
   }
 
   testWidgets(
+    'save location shows the system path while preserving the engine path',
+    (tester) async {
+      String? selected;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: desktopTheme(),
+          builder: foruiBuilder,
+          home: Builder(
+            builder: (context) => TextButton(
+              child: const Text('open'),
+              onPressed: () => showDialog<ArchiveCreateOptions>(
+                context: context,
+                builder: (_) => ArchiveCreateDialog(
+                  format: 'zip',
+                  aesAvailable: true,
+                  initialLevel: 6,
+                  initialPaths: const ['/private/imports/input.txt'],
+                  initialOutputPath: '/private/imports/archive.zip',
+                  formatDisplayPath: (path) => path.replaceFirst(
+                    '/private/imports/',
+                    '/storage/Documents/',
+                  ),
+                  onSelectionConfirmed: (paths, path) => selected = path,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final field = tester.widget<DesktopTextField>(
+        find.byKey(const ValueKey('create-output-path')),
+      );
+      expect(field.controller.text, '/storage/Documents/archive.zip');
+      expect(find.text('/storage/Documents/input.txt'), findsOneWidget);
+      expect(find.text('/private/imports/input.txt'), findsNothing);
+      await tester.tap(find.text('创建').last);
+      await tester.pumpAndSettle();
+      expect(selected, '/private/imports/archive.zip');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'menu creation opens content and destination controls before picking',
     (tester) async {
       final desktop = CreationDesktop();
@@ -209,8 +254,9 @@ void main() {
         final data = await screenshot.toByteData(
           format: ui.ImageByteFormat.png,
         );
-        await File('/tmp/hizip-create-dialog.png')
-            .writeAsBytes(data!.buffer.asUint8List());
+        await File(
+          '/tmp/hizip-create-dialog.png',
+        ).writeAsBytes(data!.buffer.asUint8List());
         screenshot.dispose();
       });
       tester.view.physicalSize = const Size(900, 900);

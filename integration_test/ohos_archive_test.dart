@@ -77,6 +77,181 @@ void main() {
       }
     },
   );
+  testWidgets('System document output and automatic source writeback', (
+    _,
+  ) async {
+    final outputRoot = (await NativeDocuments.downloadDirectory())!;
+    final folder = (await NativeDocuments.location(outputRoot))!;
+    expect(folder.displayPath, isNot(contains('/imports/')));
+    expect(folder.uri, startsWith('file://'));
+    expect(NativeDocuments.displayPath(outputRoot), folder.displayPath);
+    final root = await Directory(
+      await NativePaths.temporaryDirectory(),
+    ).createTemp('hizip-source-test-');
+    final service = ArchiveService(temporaryRoot: p.join(root.path, 'cache'));
+    try {
+      final input = await File(
+        p.join(root.path, '原始.txt'),
+      ).writeAsString('source writeback');
+      final archive = await NativeDocuments.directorySaveLocation(
+        outputRoot,
+        'hizip-source-${DateTime.now().microsecondsSinceEpoch}.zip',
+      );
+      expect(
+        NativeDocuments.displayPath(archive),
+        startsWith(folder.displayPath),
+      );
+      expect(
+        NativeDocuments.displayPath(archive),
+        isNot(contains('/imports/')),
+      );
+      await service.create(archive, [input.path]);
+      expect(await File(archive).exists(), isTrue);
+      await NativeDocuments.finishSave(archive);
+      final alternative = await NativeDocuments.directorySaveLocation(
+        outputRoot,
+        p.basename(archive),
+      );
+      expect(alternative, isNot(archive));
+      expect(p.basename(alternative), contains('(2)'));
+      final saved = (await NativeDocuments.location(archive))!;
+      expect(saved.uri, startsWith(folder.uri));
+      final imported = await NativeDocuments.importUri(saved.uri);
+      expect(imported.path, isNot(archive));
+      expect(imported.displayPath, saved.displayPath);
+      var doc = await service.read(imported.path);
+      expect(doc.writable, isTrue);
+      doc = await service.renameEntry(doc, doc.entries.single, '已更新.txt');
+      final renamed = await NativeDocuments.importUri(saved.uri);
+      expect((await service.read(renamed.path)).entries.single.path, '已更新.txt');
+      doc = await service.writeComment(
+        doc,
+        'saved in the system source',
+        original: '',
+      );
+      final commented = await NativeDocuments.importUri(saved.uri);
+      expect(
+        (await service.read(commented.path)).comment,
+        'saved in the system source',
+      );
+      // A stale second working copy must not overwrite changes from the first.
+      final stale = await service.read(renamed.path);
+      final before = await File(renamed.path).readAsBytes();
+      await expectLater(
+        service.renameEntry(stale, stale.entries.single, 'stale.txt'),
+        throwsA(anything),
+      );
+      expect(await File(renamed.path).readAsBytes(), before);
+      expect(
+        (await service.read(
+          (await NativeDocuments.importUri(saved.uri)).path,
+        )).comment,
+        doc.comment,
+      );
+      final readOnly = await NativeDocuments.importUri(
+        saved.uri,
+        readOnly: true,
+      );
+      final locked = await service.read(readOnly.path);
+      expect(locked.writable, isFalse);
+      await expectLater(
+        service.deleteEntries(locked, locked.entries),
+        throwsA(anything),
+      );
+      // An editor update and an import/delete operation use the same source commit.
+      final editable = await service.prepareExternal(doc, doc.entries.single);
+      await File(editable.path).writeAsString('edited outside the archive');
+      await service.save(editable);
+      final edited = await service.read(
+        (await NativeDocuments.importUri(saved.uri)).path,
+      );
+      expect(
+        utf8.decode(await service.preview(edited, edited.entries.single)),
+        'edited outside the archive',
+      );
+      final added = await service.importFiles(
+        await service.read(imported.path),
+        [input.path],
+        '',
+      );
+      final deleted = await service.deleteEntries(added, [
+        added.index.byPath['原始.txt']!,
+      ]);
+      expect(
+        (await service.read(
+          (await NativeDocuments.importUri(saved.uri)).path,
+        )).entries.length,
+        deleted.entries.length,
+      );
+      final copyPath = await NativeDocuments.directorySaveLocation(
+        outputRoot,
+        'hizip-copy-${DateTime.now().microsecondsSinceEpoch}.zip',
+      );
+      await service.create(copyPath, [input.path]);
+      await NativeDocuments.finishSave(copyPath);
+      final copyLocation = (await NativeDocuments.location(copyPath))!;
+      await NativeDocuments.copyToUri(imported.path, copyLocation.uri);
+      expect((await NativeDocuments.location(imported.path))!.uri, saved.uri);
+      final savedCopy = await service.read(
+        (await NativeDocuments.importUri(copyLocation.uri)).path,
+      );
+      expect(savedCopy.comment, (await service.read(imported.path)).comment);
+      expect(
+        utf8.decode(await service.preview(savedCopy, savedCopy.entries.single)),
+        'edited outside the archive',
+      );
+      // Copying only a read-only file never silently converts it to a writable source.
+      expect(
+        (await NativeDocuments.location(readOnly.path))!.writable,
+        isFalse,
+      );
+    } finally {
+      await service.dispose();
+      await root.delete(recursive: true);
+    }
+  });
+
+  testWidgets(
+    'System directory exports copy folders and reject existing targets',
+    (_) async {
+      final root = (await NativeDocuments.downloadDirectory())!;
+      final publicRoot = (await NativeDocuments.location(root))!;
+      final name = 'hizip-folder-${DateTime.now().microsecondsSinceEpoch}';
+      final folder = await Directory(p.join(root, name)).create();
+      await File(
+        p.join(folder.path, 'inside.txt'),
+      ).writeAsString('public directory export');
+      final destination = await NativeDocuments.finishDirectory(
+        root,
+        folder.path,
+      );
+      expect(destination, p.join(publicRoot.displayPath, name));
+      final imported = await NativeDocuments.importUri(
+        '${publicRoot.uri}/$name/inside.txt',
+      );
+      expect(
+        await File(imported.path).readAsString(),
+        'public directory export',
+      );
+      final anotherRoot = (await NativeDocuments.downloadDirectory())!;
+      final duplicate = await Directory(p.join(anotherRoot, name)).create();
+      await File(
+        p.join(duplicate.path, 'inside.txt'),
+      ).writeAsString('must not overwrite');
+      await expectLater(
+        NativeDocuments.finishDirectory(anotherRoot, duplicate.path),
+        throwsA(anything),
+      );
+      final preserved = await NativeDocuments.importUri(
+        '${publicRoot.uri}/$name/inside.txt',
+      );
+      expect(
+        await File(preserved.path).readAsString(),
+        'public directory export',
+      );
+    },
+  );
+
   testWidgets('ZIP AES-256 creates, rejects wrong passwords and decrypts', (
     _,
   ) async {
