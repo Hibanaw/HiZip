@@ -482,10 +482,19 @@ class ArchiveService {
 
   Future<List<OpenedArchiveFile>> changes() async {
     final changed = <OpenedArchiveFile>[];
+    final editablePaths = _opened
+        .where((file) => !file.readOnly)
+        .map((file) => file.path)
+        .toList();
+    final synchronized = HarmonyBridge.supported && editablePaths.isNotEmpty
+        ? await HarmonyBridge.synchronizeExternalFiles(editablePaths)
+        : const <String>[];
     for (final f in _opened) {
       if (f.readOnly || f.pending || !await File(f.path).exists()) continue;
       final stat = await File(f.path).stat();
-      if (stat.modified != f.stat.modified || stat.size != f.stat.size) {
+      if (synchronized.contains(f.path) ||
+          stat.modified != f.stat.modified ||
+          stat.size != f.stat.size) {
         final hash = await _digest(f.path);
         f.stat = stat;
         if (hash != f.hash) {

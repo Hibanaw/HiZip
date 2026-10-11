@@ -11,6 +11,7 @@ import {
 import { WindowInsets } from './WindowInsets';
 import { HostWindow } from './HostWindow';
 import { SystemFiles } from './SystemFiles';
+import { ExternalEdits } from './ExternalEdits';
 import { DocumentStore, DocumentLocation } from './DocumentStore';
 
 // UI selections include their system URI; C/FFI only receives private working paths.
@@ -18,6 +19,7 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   private binding: AbilityPluginBinding | null = null;
   private pendingUris: Want[] = [];
   private documents: DocumentStore = new DocumentStore(() => this.workspace());
+  private externalEdits: ExternalEdits = new ExternalEdits(() => this.context);
   private saves: Map<string, string> = new Map();
   private freshSaves: Set<string> = new Set();
   private directories: Map<string, string> = new Map();
@@ -54,6 +56,7 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.channel?.setMethodCallHandler(null);
     this.channel = null;
     this.documents.clear();
+    this.externalEdits.clear();
     this.saves.clear();
     this.freshSaves.clear();
     this.directories.clear();
@@ -73,6 +76,7 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.insets?.detach();
     this.abilityContext = null;
     this.documents.clear();
+    this.externalEdits.clear();
     this.saves.clear();
     this.freshSaves.clear();
     this.directories.clear();
@@ -557,6 +561,20 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success([{ name: '系统默认应用', path: 'system', icon: null, default: true }]);
         return;
       }
+      case 'syncExternalFiles': {
+        const paths = call.argument('paths') as string[];
+        if (!Array.isArray(paths)) throw new Error('Invalid editing file list.');
+        const checked = paths.map((path: string) => this.sandboxPath(path));
+        const changed: string[] = [];
+        for (const path of checked) {
+          if (!await fs.access(path)) continue;
+          await this.validateExportPath(path);
+          if (await this.externalEdits.synchronize(path)) changed.push(path);
+        }
+        result.success(changed);
+        return;
+      }
+      case 'prepareExternalFile':
       case 'openWith':
       case 'openWithDefault': {
         const path = this.localPath(call);
@@ -566,9 +584,12 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         if (writable !== null && writable !== undefined && typeof writable !== 'boolean') {
           throw new Error('Invalid file access mode.');
         }
-        await new SystemFiles(this.context).open(path,
-          this.documentMimeType(path, call.argument('mimeType') as string | null),
-          writable === true, (call.argument('application') as string | null) ?? 'system');
+        const mimeType = this.documentMimeType(path, call.argument('mimeType') as string | null);
+        const application = (call.argument('application') as string | null) ?? 'system';
+        if (application !== 'system') throw new Error('Only the system open action is available.');
+        const uri = writable === true ? await this.externalEdits.prepare(path) : fileUri.getUriFromPath(path);
+        if (call.method === 'prepareExternalFile') { result.success(uri); return; }
+        await new SystemFiles(this.context).open(uri, mimeType, writable === true, application);
         result.success(null);
         return;
       }

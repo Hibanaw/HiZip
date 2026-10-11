@@ -1,5 +1,4 @@
 import { common, Want, wantConstant } from '@kit.AbilityKit';
-import { fileUri } from '@kit.CoreFileKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
@@ -35,27 +34,13 @@ export class SystemFiles {
     return resource.id > 0 ? manager.getMediaContent(resource.id) : manager.getMediaByName(resourceName);
   }
 
-  async open(path: string, mimeType: string, writable: boolean, application: string): Promise<void> {
+  async open(uri: string, mimeType: string, writable: boolean, application: string): Promise<void> {
     if (application !== 'system') throw new Error('Only the system open action is available.');
     const want: Want = {
-      action: 'ohos.want.action.viewData', uri: fileUri.getUriFromPath(path), type: mimeType,
+      action: 'ohos.want.action.viewData', uri: uri, type: mimeType,
       flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION |
         (writable ? wantConstant.Flags.FLAG_AUTH_WRITE_URI_PERMISSION : 0),
     };
-    // Editors such as WPS save through a sibling temporary file followed by
-    // rename. Sharing only the file creates a file bind mount, which cannot be
-    // replaced. Mount its dedicated extraction directory after the file instead.
-    // Never grant the whole cache, an archive cache, or an imported document's
-    // directory: only ArchiveService's one-entry editing workspace is eligible.
-    const relative = path.substring(this.context.cacheDir.length);
-    if (writable && path.startsWith(this.context.cacheDir + '/') &&
-        /^\/hizip-[a-zA-Z0-9]+\/archive-[a-zA-Z0-9]+\/file-[a-zA-Z0-9]+\/[^/]+$/.test(relative) &&
-        !relative.split('/').some((part: string) => part === '.' || part === '..' || part.includes('\u0000'))) {
-      want.parameters = {
-        'ability.params.stream': [fileUri.getUriFromPath(path),
-          fileUri.getUriFromPath(path.substring(0, path.lastIndexOf('/')))],
-      };
-    }
     await this.context.startAbility(want);
   }
 }

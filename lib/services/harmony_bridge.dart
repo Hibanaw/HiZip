@@ -21,4 +21,12 @@ class HarmonyBridge {
       NativeDocuments.finishDirectory(root, output);
   static Future<void> finishSave(String path) =>
       NativeDocuments.finishSave(path);
+
+  static Future<List<String>> synchronizeExternalFiles(
+    List<String> paths,
+  ) async =>
+      await channel.invokeListMethod<String>('syncExternalFiles', {
+        'paths': paths,
+      }) ??
+      const [];
 }
