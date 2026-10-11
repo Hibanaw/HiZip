@@ -141,6 +141,33 @@ void main() {
   }, skip: !enabled);
 
   test(
+    'editor replacement saves are detected and written back repeatedly',
+    () async {
+      final doc = await archive('replacement');
+      final opened = await service.prepareExternal(doc, doc.entries.single);
+      for (final content in ['edited once', 'edited a second time']) {
+        // Office editors replace the original with a sibling temporary file.
+        final temporary = File(
+          p.join(File(opened.path).parent.path, '.editor-save'),
+        );
+        await temporary.writeAsString(content);
+        await temporary.rename(opened.path);
+        expect(await service.changes(), [opened]);
+        await service.save(opened);
+        expect(await service.changes(), isEmpty);
+        final updated = await service.read(doc.path);
+        expect(
+          String.fromCharCodes(
+            await service.preview(updated, updated.entries.single),
+          ),
+          content,
+        );
+      }
+    },
+    skip: !enabled,
+  );
+
+  test(
     'failed temporary extraction removes its partially created directory',
     () async {
       final doc = await archive('failed');
