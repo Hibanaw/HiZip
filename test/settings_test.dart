@@ -60,8 +60,8 @@ void main() {
     );
     expect(find.text('文件选择高亮'), findsNothing);
     expect(find.text('淡灰色'), findsNothing);
-    await tester.ensureVisible(find.text('紫罗兰'));
-    await tester.tap(find.text('紫罗兰'));
+    await tester.ensureVisible(find.text('紫色'));
+    await tester.tap(find.text('紫色'));
     await tester.pumpAndSettle();
     expect(settings.accent, ThemeAccent.purple);
     expect(

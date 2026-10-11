@@ -61,6 +61,8 @@ void main() {
   testWidgets(
     'language choices appear under Appearance and apply immediately',
     (tester) async {
+      tester.binding.platformDispatcher.localeTestValue = const Locale('en');
+      addTearDown(tester.binding.platformDispatcher.clearLocaleTestValue);
       tester.view.physicalSize = const Size(440, 500);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -98,6 +100,52 @@ void main() {
       settings.dispose();
     },
   );
+
+  testWidgets('system labels follow OS locale independently of app language', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.binding.platformDispatcher.localeTestValue = const Locale(
+      'zh',
+      'SG',
+    );
+    addTearDown(tester.binding.platformDispatcher.clearLocaleTestValue);
+    final settings = AppSettings(writeLanguage: (_) async {});
+    await settings.setLanguage(AppLanguage.english);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: desktopTheme(),
+        builder: foruiBuilder,
+        home: SettingsPage(settings: settings),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Language'), findsOneWidget);
+    expect(find.text('跟随系统'), findsOneWidget);
+    expect(find.text('Follow System'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('language-select')));
+    await tester.pumpAndSettle();
+    expect(find.text('跟随系统'), findsNWidgets(2));
+    await tester.tap(find.text('跟随系统').last);
+    await tester.pumpAndSettle();
+    expect(settings.language, AppLanguage.system);
+    expect(find.text('跟随系统'), findsNWidgets(2));
+    await settings.setLanguage(AppLanguage.english);
+    tester.binding.platformDispatcher.localeTestValue = const Locale('fr');
+    await tester.pumpAndSettle();
+    expect(find.text('Language'), findsOneWidget);
+    expect(find.text(translateAppText('跟随系统', 'fr')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('language-select')));
+    await tester.pumpAndSettle();
+    expect(find.text(translateAppText('跟随系统', 'fr')), findsNWidgets(2));
+    expect(find.text('Follow System'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    settings.dispose();
+  });
 
   test('every supported language has complete messages and templates', () {
     final messages = {...appEnglishMessages.values, ...appMessageTemplates};
@@ -295,7 +343,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Queue (0)'), findsOneWidget);
       expect(find.byTooltip('Gallery View'), findsOneWidget);
-      expect(find.text('Search'), findsOneWidget);
+      expect(find.byTooltip('Search'), findsOneWidget);
+      await tester.tap(find.byTooltip('Search'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).decoration?.hintText,
+        'Search',
+      );
       expect(find.text('设置'), findsOneWidget);
       expect(find.text('Name'), findsOneWidget);
       expect(tester.takeException(), isNull);

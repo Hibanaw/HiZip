@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/models/archive_entry.dart';
+import 'package:hizip/models/finder_compression_request.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/desktop_integration.dart';
@@ -16,6 +18,10 @@ class SlowService extends TabsService {
   Completer<ArchiveDocument>? reading;
   Completer<OpenedArchiveFile>? opening;
   Completer<List<String>>? exporting;
+  Completer<Uint8List>? previewing;
+  @override
+  Future<Uint8List> preview(ArchiveDocument doc, ArchiveEntry entry) =>
+      previewing?.future ?? super.preview(doc, entry);
   @override
   Future<ArchiveDocument> read(String path) =>
       reading?.future ?? super.read(path);
@@ -38,6 +44,7 @@ class DragDesktop extends TabsDesktop {
     Future<void> Function()? prepareClose,
     void Function(String)? command,
     void Function(String)? openArchive,
+    Future<void> Function(FinderCompressionRequest)? compressFiles,
     VoidCallback? clearRecent,
     VoidCallback? dragEnded,
     VoidCallback? dragStarted,
@@ -49,6 +56,7 @@ class DragDesktop extends TabsDesktop {
       prepareClose: prepareClose,
       command: command,
       openArchive: openArchive,
+      compressFiles: compressFiles,
       clearRecent: clearRecent,
       dragEnded: dragEnded,
       dragStarted: dragStarted,
@@ -108,6 +116,56 @@ void main() {
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('archive-status'))).data,
       contains(title),
+    );
+  }
+
+  for (final milliseconds in [499, 500]) {
+    testWidgets('extraction result popup threshold is $milliseconds ms', (
+      tester,
+    ) async {
+      final state = await mount(tester, SlowService(), DragDesktop());
+      final done = Completer<void>();
+      final operation = state.run(
+        () async {
+          await done.future;
+          state.message('解压完成：/tmp/output');
+        },
+        title: '正在解压',
+        reportFastSuccess: false,
+      ) as Future<void>;
+      await tester.pump();
+      await tester.pump(Duration(milliseconds: milliseconds));
+      done.complete();
+      await operation;
+      expect(state.feedback.data == null, milliseconds < 500);
+      if (milliseconds >= 500) {
+        expect(state.feedback.data.detail, '解压完成：/tmp/output');
+      }
+      await tester.pump();
+      expect(find.text('解压完成：/tmp/output'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  for (final milliseconds in [100, 600]) {
+    testWidgets(
+      'preview completes without a result popup after $milliseconds ms',
+      (tester) async {
+        final service = SlowService()..previewing = Completer<Uint8List>();
+        final state = await mount(tester, service, DragDesktop());
+        final operation = state.select(
+          first.entries.last,
+          forcePreview: true,
+        ) as Future<void>;
+        await tester.pump();
+        await tester.pump(Duration(milliseconds: milliseconds));
+        service.previewing!.complete(Uint8List.fromList('ready'.codeUnits));
+        await operation;
+        await tester.pump();
+        expect(state.previewText, 'ready');
+        expect(state.feedback.data, isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
     );
   }
 
@@ -185,7 +243,8 @@ void main() {
       final closing = state.closeTab(first.path) as Future<void>;
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('task-queue-toggle')));
-      await tester.pumpAndSettle();
+      // The Forui indeterminate progress keeps animating while opening waits.
+      await tester.pump(const Duration(milliseconds: 200));
       expect(find.byKey(const ValueKey('archive-task-queue')), findsOneWidget);
       expect(find.text('等待中'), findsOneWidget);
       expect(find.textContaining('正在关闭压缩包'), findsOneWidget);
@@ -227,15 +286,33 @@ void main() {
         await operation;
         await tester.pumpAndSettle();
         expect(desktop.started, isTrue);
+        expect(state.feedback.data, isNull);
         expect(find.byKey(const ValueKey('task-feedback')), findsNothing);
         desktop.lastDragSucceeded = succeeded;
         desktop.didEnd!();
+        expect(state.feedback.data == null, succeeded);
         await tester.pumpAndSettle();
         expect(find.text(succeeded ? '拖拽完成：1 个项目' : '拖拽已取消'), findsOneWidget);
         await tester.pumpWidget(const SizedBox());
       },
     );
   }
+  testWidgets('slow native drag keeps its completion popup', (tester) async {
+    final service = SlowService()..exporting = Completer<List<String>>();
+    final desktop = DragDesktop();
+    final state = await mount(tester, service, desktop);
+    final operation = state.startMacDrag(first.entries.last) as Future<void>;
+    await tester.pump();
+    service.exporting!.complete(['/tmp/root.txt']);
+    await operation;
+    state.activeDragStartedAt = DateTime.now().subtract(
+      const Duration(milliseconds: 500),
+    );
+    desktop.lastDragSucceeded = true;
+    desktop.didEnd!();
+    expect(state.feedback.data.detail, '拖拽完成：1 个项目');
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('drag preparation reports progress and export failures', (
     tester,
   ) async {

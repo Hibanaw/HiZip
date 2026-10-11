@@ -1,4 +1,5 @@
 import '../models/app_language.dart';
+import '../models/auxiliary_window_mode.dart';
 import 'app_localizations.dart';
 
 import 'package:flutter/cupertino.dart';
@@ -100,6 +101,10 @@ class _SettingsPageState extends State<SettingsPage>
       ),
     ],
   );
+  String get systemLanguageCode =>
+      resolveAppLocale(WidgetsBinding.instance.platformDispatcher.locale)
+          .languageCode;
+
   AppSettings get settings => widget.settings;
   VoidCallback? get onClose => widget.onClose;
   @override
@@ -123,11 +128,9 @@ class _SettingsPageState extends State<SettingsPage>
                 height: windowChromeHeight(),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+                  color: context.theme.colors.muted,
                   border: Border(
-                    bottom: BorderSide(
-                      color: desktopColor(context, 0xffdadada, 0xff414248),
-                    ),
+                    bottom: BorderSide(color: context.theme.colors.border),
                   ),
                 ),
                 child: Row(
@@ -198,15 +201,21 @@ class _SettingsPageState extends State<SettingsPage>
                                     for (final mode in ThemeMode.values)
                                       DesktopButton(
                                         active: settings.themeMode == mode,
-                                        primary: settings.themeMode == mode,
                                         onPressed: settings.saving
                                             ? null
                                             : () => settings.setThemeMode(mode),
-                                        child: AppText(switch (mode) {
-                                          ThemeMode.system => '跟随系统',
-                                          ThemeMode.light => '浅色',
-                                          ThemeMode.dark => '深色',
-                                        }),
+                                        child: mode == ThemeMode.system
+                                            ? Text(
+                                                translateAppText(
+                                                  '跟随系统',
+                                                  systemLanguageCode,
+                                                ),
+                                              )
+                                            : AppText(
+                                                mode == ThemeMode.light
+                                                    ? '浅色'
+                                                    : '深色',
+                                              ),
                                       ),
                                   ],
                                 ),
@@ -219,16 +228,19 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 12),
-                                DesktopSelect<AppLanguage>(
-                                  key: const ValueKey('language-select'),
-                                  value: settings.language,
-                                  items: {
-                                    for (final value in AppLanguage.values)
-                                      value.label: value,
-                                  },
-                                  onChanged: settings.saving
-                                      ? null
-                                      : settings.setLanguage,
+                                AppLanguageScope(
+                                  languageCode: systemLanguageCode,
+                                  child: DesktopSelect<AppLanguage>(
+                                    key: const ValueKey('language-select'),
+                                    value: settings.language,
+                                    items: {
+                                      for (final value in AppLanguage.values)
+                                        value.label: value,
+                                    },
+                                    onChanged: settings.saving
+                                        ? null
+                                        : settings.setLanguage,
+                                  ),
                                 ),
                                 const SizedBox(height: 8),
                                 const AppText(
@@ -257,16 +269,25 @@ class _SettingsPageState extends State<SettingsPage>
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            DecoratedBox(
-                                              decoration: BoxDecoration(
-                                                color: value.color,
-                                                shape: BoxShape.circle,
+                                            if (settings.accent == value)
+                                              const Icon(
+                                                CupertinoIcons.check_mark,
+                                                size: 14,
+                                              )
+                                            else
+                                              DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: value.colorFor(
+                                                    Theme.of(context)
+                                                        .brightness,
+                                                  ),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const SizedBox(
+                                                  width: 14,
+                                                  height: 14,
+                                                ),
                                               ),
-                                              child: const SizedBox(
-                                                width: 14,
-                                                height: 14,
-                                              ),
-                                            ),
                                             const SizedBox(width: 6),
                                             AppText(value.label),
                                           ],
@@ -313,6 +334,31 @@ class _SettingsPageState extends State<SettingsPage>
                                 ),
                                 const AppText(
                                   '调整界面文字大小，重启应用后仍会保留。',
+                                  style: TextStyle(fontSize: 12, height: 1.6),
+                                ),
+                                const SizedBox(height: 24),
+                                const AppText(
+                                  '辅助窗口显示方式',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                DesktopSelect<AuxiliaryWindowMode>(
+                                  key: const ValueKey('window-mode-select'),
+                                  value: settings.windowMode,
+                                  items: const {
+                                    '画面内显示': AuxiliaryWindowMode.inline,
+                                    '独立窗口显示': AuxiliaryWindowMode.separate,
+                                  },
+                                  onChanged: settings.saving
+                                      ? null
+                                      : settings.setWindowMode,
+                                ),
+                                const SizedBox(height: 8),
+                                const AppText(
+                                  '控制设置、属性和对话框的显示位置。任务进度和结果始终显示在下方状态栏。紧凑布局下对话框全屏显示。',
                                   style: TextStyle(fontSize: 12, height: 1.6),
                                 ),
                               ],
@@ -435,6 +481,31 @@ class _SettingsPageState extends State<SettingsPage>
                                         },
                                   child: const AppText('设为默认打开方式'),
                                 ),
+                                if (DesktopIntegration().supportsQuickLook) ...[
+                                  const SizedBox(height: 24),
+                                  const AppText('Finder 右键菜单'),
+                                  const SizedBox(height: 10),
+                                  const AppText(
+                                    '启用 HiZip Finder 扩展后，可在文件右键菜单中创建压缩包或快速创建 ZIP。',
+                                  ),
+                                  const SizedBox(height: 12),
+                                  DesktopButton(
+                                    onPressed: () async {
+                                      try {
+                                        await DesktopIntegration()
+                                            .showFinderExtensionSettings();
+                                      } catch (error) {
+                                        if (mounted) {
+                                          setState(
+                                            () => associationResult =
+                                                '设置失败：$error',
+                                          );
+                                        }
+                                      }
+                                    },
+                                    child: const AppText('管理 Finder 扩展'),
+                                  ),
+                                ],
                                 if (associationResult != null)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 12),
@@ -469,8 +540,6 @@ class _SettingsPageState extends State<SettingsPage>
                                       DesktopButton(
                                         active:
                                             settings.extractionWorkers == value,
-                                        primary:
-                                            settings.extractionWorkers == value,
                                         onPressed: settings.saving
                                             ? null
                                             : () => settings
@@ -504,9 +573,9 @@ class _SettingsPageState extends State<SettingsPage>
                                 const SizedBox(height: 16),
                                 AppText(
                                   settings.error!,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xffb44444),
+                                    color: Theme.of(context).colorScheme.error,
                                   ),
                                 ),
                               ],
@@ -522,14 +591,10 @@ class _SettingsPageState extends State<SettingsPage>
                       Container(
                         width: sidebarWidth,
                         decoration: BoxDecoration(
-                          color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+                          color: context.theme.colors.muted,
                           border: Border(
                             right: BorderSide(
-                              color: desktopColor(
-                                context,
-                                0xffdadada,
-                                0xff414248,
-                              ),
+                              color: context.theme.colors.border,
                             ),
                           ),
                         ),

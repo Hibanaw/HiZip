@@ -34,7 +34,7 @@ class BrowsingPreferences {
   static double minIconSize(String view) =>
       ['grid', 'gallery'].contains(view) ? 32 : 12;
   static double maxIconSize(String view) => switch (view) {
-    'grid' => 256,
+    'grid' => 144,
     'gallery' => 160,
     'columns' => 32,
     _ => 36,
@@ -69,6 +69,15 @@ class BrowsingPreferences {
         ? json['view'] as String
         : 'list';
     double size(String key, String mode, double fallback) {
+      final value = json[key];
+      if (mode == 'grid' &&
+          value is num &&
+          value.isFinite &&
+          value > maxIconSize(mode) &&
+          value <= 256) {
+        // Preserve sizes from the previous grid range at the new maximum.
+        return maxIconSize(mode);
+      }
       final legacy = json['iconSize'];
       if (!json.containsKey(key) &&
           view == mode &&
@@ -101,7 +110,7 @@ class BrowsingPreferences {
       listNameWidth: number('listNameWidth', 0, 0, 2000),
       listSizeWidth: number('listSizeWidth', 85, 65, 400),
       listModifiedWidth: number('listModifiedWidth', 115, 90, 400),
-      listKindWidth: number('listKindWidth', 85, 65, 300),
+      listKindWidth: number('listKindWidth', 85, 65, 2000),
     );
   }
 }

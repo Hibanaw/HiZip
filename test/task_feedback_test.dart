@@ -6,6 +6,26 @@ import 'package:hizip/ui/task_feedback_controller.dart';
 import 'package:hizip/ui/task_feedback_panel.dart';
 
 void main() {
+  testWidgets('fast tokenless results respect the per-task delay', (
+    tester,
+  ) async {
+    final controller = TaskFeedbackController(progressDelay: Duration.zero);
+    addTearDown(controller.dispose);
+    final token = controller.begin(
+      '正在解压',
+      reportFastSuccess: false,
+      progressDelay: const Duration(milliseconds: 500),
+    );
+    await tester.pump(const Duration(milliseconds: 499));
+    controller.result('解压完成');
+    controller.finish(token: token);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(controller.data, isNull);
+    controller.begin('正在拖拽', reportFastSuccess: false);
+    controller.action('dismiss');
+    controller.result('拖拽完成');
+    expect(controller.data!.detail, '拖拽完成');
+  });
   testWidgets('obsolete preview does not open a delayed window', (
     tester,
   ) async {
@@ -122,10 +142,7 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('task-feedback'))),
       const Size(440, 216),
     );
-    expect(
-      tester.getCenter(find.text('已解压到 /tmp/output')).dx,
-      closeTo(500, 1),
-    );
+    expect(tester.getCenter(find.text('已解压到 /tmp/output')).dx, closeTo(500, 1));
     expect(tester.getCenter(find.text('关闭')).dx, closeTo(500, 1));
     await tester.tap(find.text('关闭'));
     await tester.pumpAndSettle();

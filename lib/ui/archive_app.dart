@@ -1,6 +1,23 @@
 import 'app_localizations.dart';
+import 'auxiliary_dialogs.dart';
 
 import 'dart:async';
+import 'dart:convert';
+
+import 'archive_name_editor.dart';
+import 'archive_comment_field.dart';
+import 'archive_security_dialogs.dart';
+import 'extraction_options_dialog.dart';
+import '../models/archive_create_options.dart';
+import '../models/finder_compression_request.dart';
+import '../services/finder_compression.dart';
+import '../models/archive_properties.dart';
+import '../models/application_menu.dart';
+
+import 'package:hizip_native/hizip_native.dart';
+
+import '../services/archive_volumes.dart';
+import '../services/rar_volumes.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:forui/forui.dart';
@@ -14,6 +31,7 @@ import 'package:path/path.dart' as p;
 
 import '../models/archive_entry.dart';
 import '../models/browsing_preferences.dart';
+import '../models/list_column_layout.dart';
 import '../models/archive_index.dart';
 import '../models/directory_listing.dart';
 import '../models/preview_text.dart';
@@ -21,6 +39,7 @@ import '../models/preview_limit.dart';
 import '../services/archive_service.dart';
 import '../services/desktop_integration.dart';
 import 'file_item_surface.dart';
+import 'file_selection_area.dart';
 import 'gallery_browser.dart';
 import 'file_context_menu.dart';
 import '../models/archive_preferences.dart';
@@ -31,6 +50,7 @@ import '../services/app_settings.dart';
 import '../services/task_windows.dart';
 import 'window_chrome.dart';
 import 'task_feedback_controller.dart';
+import 'inline_properties_dialog.dart';
 import 'breathing_status_bar.dart';
 import '../services/archive_task_queue.dart';
 import '../services/queued_archive_service.dart';
@@ -41,7 +61,7 @@ import '../services/file_transfer_clipboard.dart';
 
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
-const muted = Color(0xff8b909b), blue = Color(0xff3478f6);
+const _selectionStripHeight = 40.0;
 
 class _ArchiveTab {
   _ArchiveTab(this.document);
@@ -69,6 +89,9 @@ class ArchiveWorkspace extends StatefulWidget {
     this.initialDocument,
     this.clipboard,
     this.enableNativeTransfers = true,
+    this.propertiesData,
+    this.propertiesAction,
+    this.propertiesWindowFactory,
   });
   final FileTransferClipboard? clipboard;
   final bool enableNativeTransfers;
@@ -76,12 +99,17 @@ class ArchiveWorkspace extends StatefulWidget {
   final ArchiveService? service;
   final DesktopIntegration? desktop;
   final ArchiveDocument? initialDocument;
+  final Map<String, dynamic>? propertiesData;
+  final PropertiesWindowAction? propertiesAction;
+  final PropertiesWindowTransport Function()? propertiesWindowFactory;
   @override
   State<ArchiveWorkspace> createState() => _ArchiveWorkspaceState();
 }
 
 class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     with WidgetsBindingObserver {
+  Color get muted => context.theme.colors.mutedForeground;
+
   static const listInset = 6.0;
   final contentScaffold = GlobalKey<ScaffoldState>();
   late final settings = widget.settings ?? AppSettings.instance;
@@ -89,18 +117,28 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   late final service = QueuedArchiveService(
     widget.service ?? ArchiveService(),
     taskQueue,
+    authorize: desktop.authorizeFileAccess,
   );
   bool queueExpanded = false;
   TextEditingController? entryNameInput;
+  ArchiveEntry? renamingEntry;
+  ArchiveDocument? renamingDocument;
+  bool renameDialogOpen = false;
+  final commentDrafts = <String, ArchiveCommentDraft>{};
+  final propertiesWindows = <String, PropertiesWindowTransport>{};
+  Map<String, dynamic>? propertyWindowData;
+  String? propertyActionError;
   int runningOperations = 0;
   late final desktop = widget.desktop ?? DesktopIntegration();
   late final clipboard = widget.clipboard ?? FileTransferClipboard();
   final selectedPaths = <String>{};
+  bool marqueeSelecting = false;
   final expandedListings = <(String, String)>{};
   final transferExports = <String, Future<List<String>>>{};
   final fileFocus = FocusNode(debugLabel: 'archive files');
   final searchFocus = FocusNode(debugLabel: 'archive search');
   bool compactSearchOpen = false;
+  bool menuTextEditing = false;
   final listScroll = ScrollController();
   final columnScroll = ScrollController();
   final pathScroll = ScrollController();
@@ -112,10 +150,14 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       listSizeWidth = 85,
       listModifiedWidth = 115,
       listKindWidth = 85;
+  double listColumnDragStart = 0;
+  ListColumnLayout? listColumnDragLayout;
   bool columns = false, gallery = false, inspectorVisible = false;
   final expandedFolders = <String>{''};
   ArchiveFolder folderTree = ArchiveFolder('');
   DefaultApplication? selectedApplication;
+  String? applicationMenuName;
+  List<FileApplication> menuApplications = [];
   int systemPreviewRequest = 0, gridColumns = 1;
   double gridTileExtent = 0, gridPadding = 0, gridSpacing = 0;
   double listIconSize = 22,
@@ -149,17 +191,25 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   double rowExtent(double size) {
-    final textHeight = MediaQuery.textScalerOf(context).scale(12) * 1.3;
-    return (size > textHeight ? size : textHeight) +
+    final textHeight = (MediaQuery.textScalerOf(context).scale(12) * 1.3)
+        .ceilToDouble();
+    final height =
+        (size > textHeight ? size : textHeight) +
         2 * (size * .16).clamp(2.0, 6.0);
+    return height;
   }
 
   bool openingSystemPreview = false;
   (ArchiveDocument, List<ArchiveEntry>)? activeDrag, armedDrag;
   (ArchiveDocument, List<ArchiveEntry>)? touchDrag;
+  DateTime? activeDragStartedAt;
   final touchDrops = TouchFileDropController();
   final search = TextEditingController();
   final recent = <String>[];
+  Set<String>? availableCreateFormats;
+  Iterable<MapEntry<String, String>> get createFormats => writableArchiveFormats
+      .entries
+      .where((entry) => availableCreateFormats?.contains(entry.key) ?? true);
   final tabs = <_ArchiveTab>[];
   List<(_ArchiveTab, ArchiveFolder, int)> sidebarSources = [];
   List<(_ArchiveTab, ArchiveFolder, int)> sidebarRows = [];
@@ -184,7 +234,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   double? progress;
   Uint8List? preview;
   String? previewText;
-  Timer? searchTimer, warmTimer;
+  Timer? searchTimer;
   int searchRequest = 0;
   List<ArchiveEntry>? searchResults;
   String? searchedFolder, searchedTerm;
@@ -192,12 +242,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   int sidebarRevision = 0;
   String? previewError;
   int previewRequest = 0;
-  int dragPreparationRequest = 0;
   Timer? timer;
   final pending = <OpenedArchiveFile>[];
   Color get ink => Theme.of(context).colorScheme.onSurface;
-  final feedback = TaskFeedbackController(
-    useNativeWindows: false,
+  late final feedback = TaskFeedbackController(
+    settings: settings,
+    allowNativeWindow: () =>
+        entryNameInput == null && MediaQuery.sizeOf(context).width >= 800,
     progressDelay: Duration.zero,
   );
   @override
@@ -216,7 +267,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     inspectorWidth = browsing.inspectorWidth;
     listSortColumn = browsing.listSortColumn;
     listSortAscending = browsing.listSortAscending;
-    listNameWidth = browsing.listNameWidth;
+    // Older fixed Name widths no longer override the elastic column.
+    listNameWidth = 0;
     listSizeWidth = browsing.listSizeWidth;
     listModifiedWidth = browsing.listModifiedWidth;
     listKindWidth = browsing.listKindWidth;
@@ -230,31 +282,39 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       tabs.add(_ArchiveTab(document!));
       status = '${document!.entries.length} 个项目';
     }
+    if (widget.propertiesData != null) {
+      applyPropertiesData(widget.propertiesData!);
+      return;
+    }
     desktop.listen(
       navigate: (delta) => moveSelection(delta, fromQuickLook: true),
       prepareClose: prepareToClose,
       dragEnded: () {
         final drag = activeDrag;
         activeDrag = null;
+        final showFeedback = dragResultNeedsFeedback();
         if (mounted && drag != null && !busy && !closing) {
           message(
             desktop.lastDragSucceeded == false
                 ? '拖拽已取消'
                 : '拖拽完成：${drag.$2.length} 个项目',
+            showFeedback: desktop.lastDragSucceeded == false || showFeedback,
           );
         }
       },
       dragStarted: () {
         activeDrag = armedDrag;
+        activeDragStartedAt = DateTime.now();
         feedback.action('dismiss');
       },
       command: handleMenuCommand,
       openArchive: loadArchive,
+      compressFiles: receiveFinderCompression,
       clearRecent: () => setState(recent.clear),
     );
     unawaited(initializeArchives());
-    fileFocus.addListener(syncFileCommands);
-    searchFocus.addListener(syncFileCommands);
+    FocusManager.instance.addListener(syncFileCommands);
+    searchFocus.addListener(searchFocusChanged);
     WidgetsBinding.instance.addObserver(this);
     search.addListener(() {
       if (restoringTab) return;
@@ -286,21 +346,45 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       (_) => ensureGallerySelection(),
     );
     timer = Timer.periodic(const Duration(seconds: 3), (_) => checkChanges());
+    unawaited(loadCreateCapabilities());
+  }
+
+  Future<void> loadCreateCapabilities() async {
+    try {
+      final capability = await service.capabilities();
+      if (mounted) {
+        setState(
+          () => availableCreateFormats = Set<String>.from(
+            capability['writableFormats'] as List,
+          ),
+        );
+      }
+    } catch (_) {
+      // The create action still checks the engine before starting a write.
+    }
   }
 
   @override
   void dispose() {
+    for (final window in propertiesWindows.values) {
+      window.dispose();
+    }
+    for (final draft in commentDrafts.values) {
+      draft.dispose();
+    }
     settings.removeListener(applySettings);
+    FocusManager.instance.removeListener(syncFileCommands);
     feedback.dispose();
     touchDrops.dispose();
     taskQueue.removeListener(queueChanged);
     timer?.cancel();
     statusResetTimer?.cancel();
     searchTimer?.cancel();
-    warmTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(desktop.enableFileCommands(false));
-    desktop.dispose();
+    if (widget.propertiesData == null) {
+      unawaited(desktop.enableFileCommands(false));
+      desktop.dispose();
+    }
     fileFocus.dispose();
     searchFocus.dispose();
     sidebarScroll.dispose();
@@ -377,35 +461,26 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     saveBrowsingPreferences();
   }
 
-  void resizeListColumn(String column, double delta, {double? currentWidth}) {
+  void resizeListColumn(
+    String column,
+    double delta, {
+    required ListColumnLayout layout,
+  }) {
+    final resized = (listColumnDragLayout ?? layout)
+        .withAvailableWidth(layout.availableWidth)
+        .resizeBoundary(column, delta);
     setState(() {
-      switch (column) {
-        case 'name':
-          listNameWidth =
-              (listNameWidth == 0 ? currentWidth ?? 260 : listNameWidth) +
-              delta;
-          break;
-        case 'size':
-          listSizeWidth = (listSizeWidth + delta).clamp(65.0, 400.0);
-          break;
-        case 'modified':
-          listModifiedWidth = (listModifiedWidth + delta).clamp(90.0, 400.0);
-          break;
-        case 'kind':
-          listKindWidth = (listKindWidth + delta).clamp(65.0, 300.0);
-          break;
-      }
-      if (column == 'name') listNameWidth = listNameWidth.clamp(160.0, 2000.0);
+      listNameWidth = 0;
+      listSizeWidth = resized.size;
+      listModifiedWidth = resized.modified;
+      listKindWidth = resized.kind;
     });
   }
 
-  double listColumnWidth(String column, double fallback) => switch (column) {
-    'name' => listNameWidth == 0 ? fallback : listNameWidth,
-    'size' => listSizeWidth,
-    'modified' => listModifiedWidth,
-    'kind' => listKindWidth,
-    _ => fallback,
-  };
+  void finishListColumnResize() {
+    listColumnDragLayout = null;
+    saveBrowsingPreferences();
+  }
 
   void changeView(String view) {
     setState(() {
@@ -443,20 +518,83 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   void handleMenuCommand(String command) {
+    if (auxiliaryModalDepth.value > 0) return;
+    if (invokeTextMenuCommand(command)) return;
+    if (command == 'settings') {
+      openSettings();
+      return;
+    }
+    final item = menuCommandItem(command);
+    if (item == null || !item.enabled) return;
     if (command == 'copy') copyFiles();
     if (command == 'paste') pasteFiles();
     if (command == 'selectAll') selectAllFiles();
-    if (command == 'settings') openSettings();
-    if (command == 'open') pickArchive();
-    if (command == 'create') createArchive();
+    if (command == 'open') openCommand();
+    if (command == 'openArchive') pickArchive();
+    if (command == 'openSelection') openSelection();
+    if (command == 'openInHiZip' && selected != null) openEntry(selected!);
+    if (command == 'chooseApplication' && selected != null) {
+      chooseOpenApplication(selected!);
+    }
+    if (command.startsWith('openWith:') && selected != null) {
+      final path = command.substring(9);
+      final app = menuApplications.where((app) => app.path == path).firstOrNull;
+      if (app != null) openEntry(selected!, application: app);
+    }
+    if (command.startsWith('recent:')) loadArchive(command.substring(7));
+    if (command == 'clearRecent') setState(recent.clear);
+    if (command == 'quickZip') quickCreateZip();
+    if (command == 'create') createArchive(chooseFormat: true);
     if (command.startsWith('create:')) {
       createArchive(format: command.substring(7));
     }
     if (command == 'closeArchive') closeTab(document?.path);
     if (command == 'extract') extract();
     if (command == 'extractNamed') extract(namedFolder: true);
+    if (command == 'extractSelection') extract(onlySelected: true);
+    if (command == 'extractFolder') extract(currentFolder: true);
+    if (command == 'addFiles') addFiles();
+    if (command == 'addFolder') addFiles(directory: true);
+    if (command == 'moveTo') transferSelection(move: true);
+    if (command == 'copyTo') transferSelection(move: false);
     if (command == 'newFolder') newEntry(directory: true);
     if (command == 'newDocument') newEntry();
+    if (command == 'rename') renameSelection();
+    if (command == 'verify') verifyArchive();
+    if (command == 'properties') showProperties();
+    if (command == 'archiveProperties') showProperties(archiveOverview: true);
+    if (command == 'quickLook') quickLook();
+    if (command == 'search') openSearch();
+    if (command == 'back') goBack();
+    if (command == 'enclosingFolder') {
+      navigate(p.posix.dirname(folder) == '.' ? '' : p.posix.dirname(folder));
+    }
+    if (command == 'archiveRoot') navigate('');
+    if (command == 'previousTab' || command == 'nextTab') {
+      final index = tabs.indexWhere(
+        (tab) => tab.document.path == document?.path,
+      );
+      final delta = command == 'nextTab' ? 1 : -1;
+      switchTab(tabs[(index + delta) % tabs.length]);
+    }
+    if (command == 'tasks') setState(() => queueExpanded = !queueExpanded);
+    if (command.startsWith('sort:')) {
+      setState(() => listSortColumn = command.substring(5));
+      saveBrowsingPreferences();
+    }
+    if (command == 'ascending' || command == 'descending') {
+      setState(() => listSortAscending = command == 'ascending');
+      saveBrowsingPreferences();
+    }
+    if (command == 'largerIcons' || command == 'smallerIcons') {
+      setState(() {
+        iconSize = (iconSize + (command == 'largerIcons' ? 4 : -4)).clamp(
+          BrowsingPreferences.minIconSize(browsingView),
+          BrowsingPreferences.maxIconSize(browsingView),
+        );
+      });
+      saveBrowsingPreferences();
+    }
     if (command == 'delete') deleteSelection();
     if (command == 'list' ||
         command == 'grid' ||
@@ -471,6 +609,118 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       }
     }
     if (command == 'inspector') toggleInspector();
+  }
+
+  bool invokeTextMenuCommand(String command) {
+    final focus = FileContextMenu.commandFocus?.context;
+    if (focus == null ||
+        !focus.mounted ||
+        focus.findAncestorStateOfType<EditableTextState>() == null) {
+      return false;
+    }
+    final Intent? intent = switch (command) {
+      'undo' => const UndoTextIntent(SelectionChangedCause.toolbar),
+      'redo' => const RedoTextIntent(SelectionChangedCause.toolbar),
+      'cut' => const CopySelectionTextIntent.cut(SelectionChangedCause.toolbar),
+      'copy' => CopySelectionTextIntent.copy,
+      'paste' => const PasteTextIntent(SelectionChangedCause.toolbar),
+      'selectAll' => const SelectAllTextIntent(SelectionChangedCause.toolbar),
+      _ => null,
+    };
+    if (intent == null) return false;
+    Actions.maybeInvoke(focus, intent);
+    return true;
+  }
+
+  ApplicationMenuItem? menuCommandItem(String command) {
+    ApplicationMenuItem? find(List<ApplicationMenuItem> items) {
+      for (final item in items) {
+        if (item.command == command) return item;
+        if (item.children != null) {
+          final result = find(item.children!);
+          if (result != null) return result;
+        }
+      }
+      return null;
+    }
+
+    return find(applicationMenus);
+  }
+
+  void openSearch() {
+    setState(() => compactSearchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && compactSearchOpen) searchFocus.requestFocus();
+    });
+  }
+
+  Future<void> addFiles({bool directory = false}) async {
+    try {
+      final paths = directory
+          ? [if (await getDirectoryPath() case final String path) path]
+          : (await openFiles()).map((file) => file.path).toList();
+      if (!mounted || paths.isEmpty || closing) return;
+      await receiveFiles(paths, folder);
+    } catch (error) {
+      if (mounted) message(error.toString(), error: true);
+    }
+  }
+
+  bool acceptsSelectionDestination(String path, List<ArchiveEntry> entries) =>
+      !entries.any(
+        (entry) =>
+            entry.directory &&
+            (path == entry.normalized ||
+                path.startsWith('${entry.normalized}/')),
+      ) &&
+      !entries.every(
+        (entry) =>
+            (p.posix.dirname(entry.normalized) == '.'
+                ? ''
+                : p.posix.dirname(entry.normalized)) ==
+            path,
+      );
+
+  Future<void> transferSelection({required bool move}) async {
+    final doc = document;
+    final entries = topLevelEntries(selection);
+    if (doc == null || !doc.writable || entries.isEmpty || busy || closing) {
+      return;
+    }
+    final folders =
+        [
+              '',
+              ...doc.index.byNormalized.values
+                  .where((entry) => entry.directory)
+                  .map((entry) => entry.normalized),
+            ]
+            .where((path) => acceptsSelectionDestination(path, entries))
+            .toSet()
+            .toList()
+          ..sort();
+    if (folders.isEmpty) return;
+    final target = await showAuxiliaryDialog<String>(
+      context: context,
+      settings: settings,
+      kind: 'transfer',
+      data: {'move': move, 'folders': folders},
+      decodeResult: (data) => data['value'] as String?,
+      builder: (_) => ArchiveTransferDialog(move: move, folders: folders),
+    );
+    if (target == null || !mounted || document != doc || busy || closing) {
+      return;
+    }
+    await run(() async {
+      final result = await service.transferEntries(
+        doc,
+        entries,
+        target,
+        move: move,
+      );
+      refreshDocument(result);
+      navigate(target);
+      message(move ? '已移动 ${entries.length} 个项目' : '已复制 ${entries.length} 个项目');
+    }, title: move ? '正在移动文件' : '正在复制文件');
   }
 
   Future<void> initializeArchives() async {
@@ -494,7 +744,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Future<void> openSettings() async {
     try {
-      if (await showSettingsWindow(settings)) return;
+      if (await showSettingsWindow(
+        settings,
+        forceInline: MediaQuery.sizeOf(context).width < 800,
+      )) {
+        return;
+      }
     } catch (e) {
       message('$e', error: true);
       return;
@@ -511,6 +766,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   void queueChanged() {
+    if (taskQueue.tasks.any((task) => task.running && task.cancelled) &&
+        feedback.reply != null) {
+      feedback.action('cancel');
+    }
     if (mounted) setState(() {});
   }
 
@@ -519,48 +778,64 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     String title = '正在处理文件',
     bool showProgress = true,
     bool reportSuccess = true,
+    bool reportFastSuccess = true,
     String? archivePath,
   }) async {
     if (closing || !mounted) return;
-    await taskQueue.run(archivePath ?? document?.path ?? "", title, () async {
-      if (!mounted || closing) return;
-      while (feedback.reply != null) {
-        await feedback.reply!.future;
+    try {
+      await taskQueue.run(archivePath ?? document?.path ?? "", title, () async {
         if (!mounted || closing) return;
-      }
-      final done = operationDone = Completer<void>();
-      clearPreparedDrag();
-      final feedbackToken = feedback.begin(
-        title,
-        showProgress: showProgress,
-        reportFastSuccess: reportSuccess,
-      );
-      setState(() {
-        runningOperations++;
-        busy = true;
-        progress = null;
-        statusError = false;
-      });
-      try {
-        await work();
-      } catch (e) {
-        if (mounted) {
-          message(e.toString().replaceFirst('Bad state: ', ''), error: true);
+        while (feedback.reply != null) {
+          await feedback.reply!.future;
+          if (!mounted || closing) return;
         }
-      } finally {
-        feedback.finish(token: feedbackToken);
-        if (!done.isCompleted) done.complete();
-        if (identical(operationDone, done)) operationDone = null;
-        if (mounted) {
-          setState(() {
-            runningOperations--;
-            busy = runningOperations > 0;
-            progress = null;
-          });
-          unawaited(showChanges());
+        final done = operationDone = Completer<void>();
+        clearPreparedDrag();
+        final feedbackToken = feedback.begin(
+          title,
+          showProgress: showProgress,
+          reportFastSuccess: reportSuccess && reportFastSuccess,
+          progressDelay: reportFastSuccess
+              ? null
+              : const Duration(milliseconds: 500),
+        );
+        setState(() {
+          runningOperations++;
+          busy = true;
+          progress = null;
+          statusError = false;
+        });
+        try {
+          await work();
+        } catch (e) {
+          if (mounted) {
+            if (e is ArchiveOperationCancelled || e is ArchiveTaskCancelled) {
+              message('操作已取消');
+            } else {
+              message(
+                e.toString().replaceFirst('Bad state: ', ''),
+                error: true,
+              );
+            }
+          }
+          rethrow;
+        } finally {
+          feedback.finish(token: feedbackToken);
+          if (!done.isCompleted) done.complete();
+          if (identical(operationDone, done)) operationDone = null;
+          if (mounted) {
+            setState(() {
+              runningOperations--;
+              busy = runningOperations > 0;
+              progress = null;
+            });
+            unawaited(showChanges());
+          }
         }
-      }
-    });
+      }, retryable: true);
+    } catch (_) {
+      /* Failure is shown and remains in the task list when retryable. */
+    }
   }
 
   Future<T> observed<T>(
@@ -569,6 +844,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     required String success,
     bool Function()? current,
     bool reportFastSuccess = true,
+    bool reportSuccess = true,
   }) async {
     if (closing || !mounted) throw StateError('操作已取消');
     return taskQueue.run(document?.path ?? '', title, () async {
@@ -579,12 +855,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       final token = feedback.begin(
         title,
         reportFastSuccess: reportFastSuccess,
+        progressDelay: reportFastSuccess
+            ? null
+            : const Duration(milliseconds: 500),
         current: () => mounted && (current?.call() ?? true),
       );
       try {
         final result = await work();
         if (mounted && (current?.call() ?? true)) {
-          feedback.result(success, token: token);
+          if (reportSuccess) {
+            feedback.result(success, token: token);
+          } else if (token == feedback.generation) {
+            feedback.action('dismiss');
+          }
         } else if (token == feedback.generation) {
           feedback.action('dismiss');
         }
@@ -611,7 +894,6 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   Future<void> prepareToClose() async {
     closing = true;
     try {
-      warmTimer?.cancel();
       ++previewRequest;
       ++systemPreviewRequest;
       feedback.action('dismiss');
@@ -660,15 +942,11 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Future<void> pickArchive() async {
-    if (!service.supported) {
-      message('浏览器版本需要 WebAssembly 引擎。请使用原生桌面版本。');
-      return;
-    }
     final files = await openFiles(
-      acceptedTypeGroups: const [
+      acceptedTypeGroups: [
         XTypeGroup(
           label: '压缩文件',
-          extensions: readableArchiveExtensions,
+          extensions: readableArchivePickerExtensions,
           uniformTypeIdentifiers: ['public.data'],
         ),
       ],
@@ -730,10 +1008,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   void activateTab(_ArchiveTab? tab, {bool save = true}) {
+    cancelRename(focus: false);
     if (save) saveActiveTab();
     clearPreparedDrag();
     transferExports.clear();
-    warmTimer?.cancel();
     searchTimer?.cancel();
     ++previewRequest;
     ++systemPreviewRequest;
@@ -774,6 +1052,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       statusError = false;
     });
     restoringTab = false;
+    revealCurrentPath();
     if (search.text.isNotEmpty) unawaited(searchFolder(searchRequest));
     if (selected != null) {
       unawaited(updateApplication(selected!, previewRequest));
@@ -818,13 +1097,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         if (active) {
           ++previewRequest;
           ++systemPreviewRequest;
-          warmTimer?.cancel();
           await desktop.closeQuickLook();
         }
         await service.closeArchive(tab.document.path);
         if (!mounted) return;
         pending.removeWhere((file) => file.archive == path);
-        setState(() => tabs.remove(tab));
+        setState(() {
+          tabs.remove(tab);
+          commentDrafts.remove(tab.document.path)?.dispose();
+        });
         if (active) {
           activateTab(
             tabs.isEmpty ? null : tabs[(index - 1).clamp(0, tabs.length - 1)],
@@ -843,6 +1124,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Future<void> loadArchive(String path, {String? encoding}) {
+    if (ArchiveVolumes.isVolume(path)) path = ArchiveVolumes.firstPath(path);
+    if (RarVolumes.isRarPath(path)) path = RarVolumes.firstPath(path);
     final next = taskQueue.run(path, '正在打开压缩包', () async {
       if (!mounted || closing) return;
       final existing = tabFor(path);
@@ -853,16 +1136,55 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       await run(
         () async {
           service.readEncoding = encoding ?? settings.archive.readEncoding;
-          final result = await service.read(path);
+          ArchiveDocument? result;
+          try {
+            result = await service.read(path);
+          } catch (error) {
+            if (!RegExp(
+              'password|passphrase|encrypted',
+              caseSensitive: false,
+            ).hasMatch(error.toString())) {
+              rethrow;
+            }
+          }
+          if (result == null ||
+              (result.entries.any((entry) => entry.encrypted) &&
+                  result.password.isEmpty)) {
+            if (!mounted) return;
+            final unlocked = await showAuxiliaryDialog<bool>(
+              context: context,
+              settings: settings,
+              kind: 'password',
+              data: const {},
+              decodeResult: (data) => data['value'] as bool?,
+              onAction: (action, data) async {
+                result = await service.readWithPassword(
+                  path,
+                  data['password'] as String,
+                );
+                return {};
+              },
+              barrierDismissible: false,
+              builder: (_) => ArchivePasswordDialog(
+                onUnlock: (password) async {
+                  result = await service.readWithPassword(path, password);
+                },
+              ),
+            );
+            if (unlocked != true) return;
+          }
+          final openedDocument = result!;
           if (!mounted) return;
           saveActiveTab();
           final previousIndex = existing == null ? -1 : tabs.indexOf(existing);
           if (existing != null) {
-            await service.closeArchive(path);
+            if (!ArchiveVolumes.isVolume(path)) {
+              await service.closeArchive(path);
+            }
             pending.removeWhere((file) => file.archive == path);
             tabs.remove(existing);
           }
-          final tab = _ArchiveTab(result);
+          final tab = _ArchiveTab(openedDocument);
           if (existing == null) {
             tabs.add(tab);
           } else {
@@ -882,34 +1204,169 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     return next;
   }
 
-  Future<void> createArchive({String format = 'zip'}) async {
+  Future<void> finderCompressionQueue = Future.value();
+
+  Future<void> quickCreateZip() async {
+    try {
+      final paths = await desktop.selectCompressionContents();
+      if (!mounted || closing || paths.isEmpty) return;
+      await receiveFinderCompression(
+        FinderCompressionRequest(paths: paths, quickZip: true),
+      );
+    } catch (error) {
+      if (mounted) message(error.toString(), error: true);
+    }
+  }
+
+  Future<void> receiveFinderCompression(FinderCompressionRequest request) {
+    final next = finderCompressionQueue.then((_) async {
+      if (!mounted || closing) return;
+      try {
+        if (!await desktop.authorizeFileAccess(
+          readPaths: request.paths,
+          writeDirectories: request.quickZip
+              ? [p.dirname(request.paths.first)]
+              : const [],
+        )) {
+          return;
+        }
+        if (!mounted || closing) return;
+        if (request.quickZip) {
+          final target = await availableFinderArchivePath(request.paths, 'zip');
+          await run(
+            () async {
+              await createFinderQuickZip(
+                service,
+                request.paths,
+                output: target,
+              );
+              message('压缩包已创建');
+            },
+            title: '正在创建压缩包',
+            archivePath: target,
+          );
+        } else {
+          await createArchive(sourcePaths: request.paths, chooseFormat: true);
+        }
+      } catch (error) {
+        if (mounted) message(error.toString(), error: true);
+      }
+    });
+    finderCompressionQueue = next.catchError((Object _) {});
+    return next;
+  }
+
+  Future<void> createArchive({
+    String format = 'zip',
+    bool empty = false,
+    List<String>? sourcePaths,
+    bool chooseFormat = false,
+  }) async {
     if (!writableArchiveFormats.containsKey(format)) return;
-    if (!service.supported) return;
-    final files = await openFiles();
-    if (files.isEmpty) return;
-    final target = await getSaveLocation(
-      suggestedName: 'Archive.$format',
-      acceptedTypeGroups: [
-        XTypeGroup(
-          label: writableArchiveFormats[format]!,
-          extensions: [format],
-        ),
-      ],
+    var files = empty ? <String>[] : List<String>.of(sourcePaths ?? []);
+    late Map<String, dynamic> capability;
+    try {
+      capability = await service.capabilities();
+    } catch (error) {
+      if (mounted) message(error.toString(), error: true);
+      return;
+    }
+    if (!mounted) return;
+    final supported = List<String>.from(capability['writableFormats'] as List);
+    if (!supported.contains(format)) {
+      message('当前引擎不支持此压缩格式。', error: true);
+      return;
+    }
+    String? output;
+    if (!mounted || closing) return;
+    final Map<String, String> creationFormats = chooseFormat
+        ? {
+            for (final entry in writableArchiveFormats.entries)
+              if (supported.contains(entry.key) &&
+                  !const [
+                    'gz',
+                    'bz2',
+                    'xz',
+                    'lzma',
+                    'zst',
+                    'lz4',
+                    'lzip',
+                    'Z',
+                  ].contains(entry.key))
+                entry.key: entry.value,
+          }
+        : const {};
+    final options = await showAuxiliaryDialog<ArchiveCreateOptions>(
+      context: context,
+      settings: settings,
+      kind: 'create',
+      data: {
+        'format': format,
+        'aesAvailable': capability['zipAES256'] == true,
+        'empty': empty,
+        'initialLevel': settings.archive.compressionLevel,
+        'initialNestInFolder': files.length > 1,
+        'paths': files,
+        'output': output ?? '',
+        'formats': creationFormats,
+      },
+      decodeResult: (data) {
+        files = List<String>.from(data['paths'] as List);
+        output = data['output'] as String;
+        return ArchiveCreateOptions.fromJson(
+          Map<String, dynamic>.from(data['options'] as Map),
+        );
+      },
+      builder: (_) => ArchiveCreateDialog(
+        format: format,
+        aesAvailable: capability['zipAES256'] == true,
+        empty: empty,
+        initialLevel: settings.archive.compressionLevel,
+        initialNestInFolder: files.length > 1,
+        initialPaths: files,
+        initialOutputPath: output ?? '',
+        selectContents: ({bool foldersOnly = false}) =>
+            desktop.selectCompressionContents(foldersOnly: foldersOnly),
+        suggestOutputPath: availableFinderArchivePath,
+        selectOutputPath: selectArchiveOutputPath,
+        onSelectionConfirmed: (paths, path) {
+          files = paths;
+          output = path;
+        },
+        formats: creationFormats,
+      ),
     );
-    if (target == null) return;
+    if (options == null || output == null || !mounted || closing) return;
+    final target = output!;
+    if (!await desktop.authorizeFileAccess(
+          readPaths: files,
+          writeDirectories: [p.dirname(target)],
+        ) ||
+        !mounted ||
+        closing) {
+      return;
+    }
+    var created = false;
     await run(
       () async {
-        await service.create(target.path, files.map((f) => f.path).toList());
+        await service.createWithOptions(target, files, options);
+        created = true;
         message('压缩包已创建');
       },
       title: '正在创建压缩包',
-      archivePath: target.path,
+      archivePath: target,
     );
-    await loadArchive(target.path, encoding: settings.archive.createEncoding);
+    if (created) {
+      await loadArchive(
+        options.volumeSize > 0 ? '$target.001' : target,
+        encoding: settings.archive.createEncoding,
+      );
+    }
   }
 
   void navigate(String next, {bool back = false}) {
     if (next == folder) return;
+    cancelRename(focus: false);
     clearPreparedDrag();
     previewRequest++;
     ++systemPreviewRequest;
@@ -927,7 +1384,22 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       search.clear();
     });
     if (columns) revealColumns();
+    revealCurrentPath();
     ensureGallerySelection();
+  }
+
+  void revealCurrentPath() {
+    final archivePath = document?.path;
+    final currentFolder = folder;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          document?.path != archivePath ||
+          folder != currentFolder ||
+          !pathScroll.hasClients) {
+        return;
+      }
+      pathScroll.jumpTo(pathScroll.position.maxScrollExtent);
+    });
   }
 
   void goBack() {
@@ -959,7 +1431,6 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       });
       return;
     }
-    warmExport();
     unawaited(updateApplication(entry, token));
     unawaited(updateSystemPreview(entry, token));
     if ((!inspector && !gallery && !forcePreview) ||
@@ -987,6 +1458,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         success: '预览已就绪：${entry.name}',
         current: () => token == previewRequest,
         reportFastSuccess: false,
+        reportSuccess: false,
       );
       if (mounted && token == previewRequest) {
         setState(() {
@@ -1024,12 +1496,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           return;
         }
         if (application != null) await desktop.openWith(f.path, application);
-        message(
-          application == null
-              ? '已在默认应用中打开 · 修改检测已开启'
-              : '已用 ${application.name} 打开 · 修改检测已开启',
-        );
-        if (!doc.writable) message('当前格式只读。修改后的文件保留在 ${f.path}');
+        if (!doc.writable) {
+          message('已以只读模式打开。编辑时请另存到其他位置。');
+        } else {
+          message(
+            application == null
+                ? '已在默认应用中打开 · 修改检测已开启'
+                : '已用 ${application.name} 打开 · 修改检测已开启',
+          );
+        }
       },
       title: '正在打开文件',
       archivePath: doc.path,
@@ -1039,15 +1514,20 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   Future<void> extract({
     bool onlySelected = false,
     bool namedFolder = false,
+    bool currentFolder = false,
   }) async {
     final doc = document;
     if (doc == null || closing) return;
     final extractionDoc = doc;
+    final folderRoot = currentFolder ? doc.index.byNormalized[folder] : null;
+    if (currentFolder && (folderRoot == null || !folderRoot.directory)) return;
     // A selection extracts its own roots directly into the destination. So
     // does the whole archive, unless the caller asked for it to land inside
     // a folder named after the archive (roots: null lets the service pick
     // and auto-dedupe that name) — the two never combine in this app's UI.
-    final extractionRoots = onlySelected && selection.isNotEmpty
+    final extractionRoots = folderRoot != null
+        ? [folderRoot]
+        : onlySelected && selection.isNotEmpty
         ? topLevelEntries(selection)
         : namedFolder
         ? null
@@ -1058,7 +1538,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         settings.locale.languageCode,
       ),
     );
-    if (target == null) return;
+    if (target == null || !mounted) return;
+    final conflictPolicy = await showAuxiliaryDialog<ExtractionConflictPolicy>(
+      context: context,
+      settings: settings,
+      kind: 'extraction',
+      data: const {},
+      decodeResult: (data) =>
+          ExtractionConflictPolicy.values.byName(data['value'] as String),
+      builder: (_) => const ExtractionOptionsDialog(),
+    );
+    if (conflictPolicy == null || !mounted) return;
     var linkPolicy = LinkPolicy.keepAll;
     final unsafeLinks = unsafeLinksFor(extractionDoc, extractionRoots);
     if (unsafeLinks.isNotEmpty) {
@@ -1085,11 +1575,20 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       setState(() => status = defaultStatus());
     }
     var caseConflictPolicy = CaseConflictPolicy.rename;
-    final clashes = await service.caseConflicts(
-      extractionDoc,
-      target,
-      roots: extractionRoots,
-    );
+    late List<ArchiveEntry> clashes;
+    try {
+      clashes = await service.caseConflicts(
+        extractionDoc,
+        target,
+        roots: extractionRoots,
+      );
+    } on ArchiveTaskCancelled {
+      return;
+    } catch (error) {
+      if (mounted) message(error.toString(), error: true);
+      return;
+    }
+    if (!mounted) return;
     if (clashes.isNotEmpty) {
       final situation = '有 ${clashes.length} 个文件仅大小写不同，目标磁盘不区分大小写';
       setState(() {
@@ -1123,6 +1622,27 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           linkPolicy: linkPolicy,
           caseConflictPolicy: caseConflictPolicy,
           notice: notices.add,
+          conflictPolicy: conflictPolicy,
+          resolveConflict: (path) async {
+            final choice = await feedback.ask(
+              TaskFeedback(
+                title: '目标项目已存在',
+                detail: path,
+                actions: const {
+                  'overwrite': '覆盖',
+                  'skip': '跳过',
+                  'rename': '自动重命名',
+                  'cancel': '取消',
+                },
+              ),
+            );
+            return switch (choice) {
+              'overwrite' => ExtractionConflictPolicy.overwrite,
+              'skip' => ExtractionConflictPolicy.skip,
+              'rename' => ExtractionConflictPolicy.rename,
+              _ => null,
+            };
+          },
           progress: (done, total) {
             if (mounted) {
               setState(() {
@@ -1154,6 +1674,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         }
       },
       title: '正在解压',
+      reportFastSuccess: false,
       archivePath: doc.path,
       showProgress: true,
     );
@@ -1300,7 +1821,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   List<ArchiveEntry> sortedListItems(String path) {
-    final entries = List<ArchiveEntry>.of(itemsInFolder(path));
+    final source = itemsInFolder(path);
+    // The index and filtered search results already have the default order.
+    if (listSortColumn == 'name' && listSortAscending) return source;
+    final entries = List<ArchiveEntry>.of(source);
     entries.sort((a, b) {
       if (a.directory != b.directory) return a.directory ? -1 : 1;
       var result = switch (listSortColumn) {
@@ -1323,7 +1847,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       (path, path == folder ? search.text : '');
 
   DirectoryListing listingInFolder(String path) => DirectoryListing(
-    !grid && !columns && !gallery ? sortedListItems(path) : itemsInFolder(path),
+    sortedListItems(path),
     expanded: expandedListings.contains(listingKey(path)),
   );
 
@@ -1351,7 +1875,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               textAlign: TextAlign.center,
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: muted),
+              style: TextStyle(fontSize: 12, color: muted),
             ),
           ),
         ),
@@ -1394,10 +1918,27 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ensureGallerySelection();
   }
 
+  void searchFocusChanged() {
+    syncFileCommands();
+    if (mounted && compactSearchOpen && !searchFocus.hasFocus) {
+      setState(() => compactSearchOpen = false);
+    }
+  }
+
   void syncFileCommands() {
-    unawaited(
-      desktop.enableFileCommands(fileFocus.hasFocus && !searchFocus.hasFocus),
-    );
+    unawaited(desktop.enableFileCommands(fileFocus.hasPrimaryFocus));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focus = FileContextMenu.commandFocus?.context;
+      final textEditing =
+          focus != null &&
+          focus.mounted &&
+          focus.findAncestorStateOfType<EditableTextState>() != null;
+      if (textEditing != menuTextEditing) {
+        setState(() => menuTextEditing = textEditing);
+      }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void selectAllFiles() {
@@ -1423,34 +1964,6 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         transferExports.remove(key);
         rethrow;
       }
-    });
-  }
-
-  void warmExport() {
-    if (!widget.enableNativeTransfers ||
-        document == null ||
-        selection.isEmpty) {
-      return;
-    }
-    final entries = selection;
-    if (entries.length != 1 ||
-        !entries.single.canExtract ||
-        entries.single.size > 512 * 1024) {
-      return;
-    }
-    final doc = document!;
-    warmTimer?.cancel();
-    warmTimer = Timer(const Duration(milliseconds: 150), () {
-      if (!mounted ||
-          busy ||
-          document != doc ||
-          selectedPaths.length != 1 ||
-          !selectedPaths.contains(entries.single.path)) {
-        return;
-      }
-      unawaited(
-        exported(doc, entries).then<void>((_) {}, onError: (Object _) {}),
-      );
     });
   }
 
@@ -1511,6 +2024,53 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     });
   }
 
+  Widget fileSelectionArea(
+    Widget child,
+    ScrollController controller, {
+    String? parent,
+  }) => FileSelectionArea(
+    key: ValueKey(
+      'file-selection-area-${document?.path}-${parent ?? folder}-$browsingView',
+    ),
+    enabled: !busy && !closing && renamingEntry == null,
+    scrollController: controller,
+    selectedPaths: selectedPaths,
+    onStart: () {
+      fileFocus.requestFocus();
+      pointerSelectedItem = true;
+      clearPreparedDrag();
+      ++previewRequest;
+      ++systemPreviewRequest;
+      unawaited(desktop.closeQuickLook());
+      setState(() {
+        marqueeSelecting = true;
+        selectedApplication = null;
+        preview = null;
+        previewText = null;
+        previewError = null;
+      });
+    },
+    onChanged: (paths) {
+      setState(() {
+        selectedPaths
+          ..clear()
+          ..addAll(paths);
+        if (selected == null || !paths.contains(selected!.path)) {
+          selected = selection.firstOrNull;
+        }
+        status = defaultStatus();
+      });
+    },
+    onEnd: () {
+      pointerSelectedItem = false;
+      setState(() => marqueeSelecting = false);
+      if (selected != null) {
+        unawaited(select(selected!, preserveSelection: true));
+      }
+    },
+    child: child,
+  );
+
   Future<void> copyFiles() async {
     if (busy || searchFocus.hasFocus || document == null || selection.isEmpty) {
       return;
@@ -1561,15 +2121,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     });
   }
 
-  Future<void> receiveFiles(List<String> paths, String destination) async {
+  Future<void> receiveFiles(
+    List<String> paths,
+    String destination, {
+    bool reportFastSuccess = true,
+  }) async {
     if (busy || paths.isEmpty) return;
     final doc = document;
     if (doc == null) {
-      if (paths.every(
-        (path) => readableArchiveExtensions.contains(
-          p.extension(path).replaceFirst('.', '').toLowerCase(),
-        ),
-      )) {
+      if (paths.every(isReadableArchivePath)) {
         for (final path in paths) {
           await loadArchive(path);
         }
@@ -1589,15 +2149,176 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         },
         title: '正在创建压缩包',
         archivePath: target.path,
+        reportFastSuccess: reportFastSuccess,
       );
       await loadArchive(target.path, encoding: settings.archive.createEncoding);
       return;
     }
+    await run(
+      () async {
+        final result = await service.importFiles(doc, paths, destination);
+        refreshDocument(result);
+        message('已导入 ${paths.length} 个项目');
+      },
+      title: '正在导入文件',
+      reportFastSuccess: reportFastSuccess,
+    );
+  }
+
+  Future<void> verifyArchive() async {
+    final doc = document;
+    if (doc == null || busy) return;
     await run(() async {
-      final result = await service.importFiles(doc, paths, destination);
-      refreshDocument(result);
-      message('已导入 ${paths.length} 个项目');
-    }, title: '正在导入文件');
+      final result = await service.verify(doc);
+      message('校验通过：${result['files']} 个项目，${result['bytes']} 字节');
+    }, title: '正在测试压缩包');
+  }
+
+  bool inlineRenaming(ArchiveEntry entry) =>
+      !renameDialogOpen && renamingEntry?.path == entry.path;
+
+  void cancelRename({bool focus = true}) {
+    if (!mounted || renamingEntry == null) return;
+    setState(() {
+      renamingEntry = null;
+      renamingDocument = null;
+    });
+    if (focus) fileFocus.requestFocus();
+  }
+
+  Future<void> renameSelection() async {
+    final doc = document, entry = selected;
+    if (doc == null ||
+        entry == null ||
+        busy ||
+        closing ||
+        !doc.writable ||
+        selectedPaths.length != 1 ||
+        renamingEntry != null) {
+      return;
+    }
+    clearPreparedDrag();
+    final compact = MediaQuery.sizeOf(context).width < 800;
+    setState(() {
+      renamingEntry = entry;
+      renamingDocument = doc;
+      renameDialogOpen = compact;
+    });
+    if (!compact) return;
+    try {
+      await showAuxiliaryDialog<bool>(
+        context: context,
+        settings: settings,
+        kind: 'rename',
+        data: {'name': entry.name, 'directory': entry.directory},
+        decodeResult: (data) => data['value'] as bool?,
+        onAction: (_, data) async {
+          await saveRename(doc, entry, data['name'] as String);
+          return {};
+        },
+        barrierDismissible: false,
+        builder: (dialogContext) => ArchiveNameEditor(
+          name: entry.name,
+          directory: entry.directory,
+          compact: true,
+          onRename: (name) async {
+            await saveRename(doc, entry, name);
+            if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+          },
+          onCancel: () => Navigator.of(dialogContext).pop(),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        cancelRename();
+        setState(() => renameDialogOpen = false);
+        fileFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> saveRename(
+    ArchiveDocument doc,
+    ArchiveEntry entry,
+    String name,
+  ) async {
+    Object? failure;
+    var completed = false;
+    await run(
+      () async {
+        try {
+          if (document?.path != doc.path) throw StateError('操作已取消');
+          final updated = await service.renameEntry(doc, entry, name);
+          if (!mounted) return;
+          final parent = p.posix.dirname(entry.normalized);
+          final target = parent == '.' ? name : '$parent/$name';
+          final selectedPath = selected?.path == entry.path
+              ? target
+              : selected?.normalized;
+          cancelRename(focus: false);
+          refreshDocument(updated);
+          navigate(parent == '.' ? '' : parent);
+          final nextSelection = selectedPath == null
+              ? null
+              : updated.index.byNormalized[selectedPath];
+          if (nextSelection != null) await select(nextSelection);
+          completed = true;
+          message('重命名完成');
+        } catch (error) {
+          failure = error;
+          rethrow;
+        }
+      },
+      title: '正在重命名',
+      archivePath: doc.path,
+    );
+    if (failure != null) throw failure!;
+    if (!completed) throw StateError('操作已取消');
+    if (mounted && !renameDialogOpen) fileFocus.requestFocus();
+  }
+
+  Widget entryName(
+    ArchiveEntry entry, {
+    double fontSize = 12,
+    int maxLines = 1,
+    TextAlign textAlign = TextAlign.start,
+    String? columnParent,
+  }) {
+    if (inlineRenaming(entry)) {
+      final doc = renamingDocument!;
+      return ArchiveNameEditor(
+        key: ValueKey('rename-${entry.path}'),
+        name: entry.name,
+        directory: entry.directory,
+        fontSize: fontSize,
+        textAlign: textAlign,
+        onRename: (name) => saveRename(doc, entry, name),
+        onCancel: cancelRename,
+        onDismiss: () => cancelRename(focus: false),
+      );
+    }
+    return Text(
+      entry.name,
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+      textAlign: textAlign,
+      style: TextStyle(
+        fontSize: fontSize,
+        height: 1.3,
+        color: entryForeground(entry, columnParent: columnParent),
+      ),
+    );
+  }
+
+  void openCommand() {
+    if (busy || renamingEntry != null) return;
+    if (defaultTargetPlatform == TargetPlatform.macOS &&
+        fileFocus.hasPrimaryFocus &&
+        selection.isNotEmpty) {
+      openSelection();
+    } else {
+      pickArchive();
+    }
   }
 
   Future<String?> entryNameDialog(bool directory) async {
@@ -1608,6 +2329,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         settings.locale.languageCode,
       ),
     );
+    if (settings.separateWindows || MediaQuery.sizeOf(context).width < 800) {
+      final name = input.text;
+      input.dispose();
+      return showAuxiliaryDialog<String>(
+        context: context,
+        settings: settings,
+        kind: 'entryName',
+        data: {'title': directory ? '新建文件夹' : '新建空白文档', 'name': name},
+        decodeResult: (data) => data['value'] as String?,
+        builder: (_) => EntryNameDialog(
+          title: directory ? '新建文件夹' : '新建空白文档',
+          initialName: name,
+        ),
+      );
+    }
     setState(() => entryNameInput = input);
     try {
       final action = await feedback.ask(
@@ -1700,9 +2436,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   DropOperation dropOperation(DropOverEvent event, String destination) {
-    if (busy ||
-        !service.supported ||
-        (document != null && !document!.writable)) {
+    if (busy || (document != null && !document!.writable)) {
       return DropOperation.none;
     }
     if (event.session.items.isEmpty ||
@@ -1785,6 +2519,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         title: event.acceptedOperation == DropOperation.move
             ? '正在移动文件'
             : '正在复制文件',
+        reportFastSuccess: false,
       );
     } else {
       try {
@@ -1805,7 +2540,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           if (uri != null && uri.scheme == 'file') paths.add(uri.toFilePath());
         }
         if (paths.isEmpty) throw StateError('无法读取拖入的文件。');
-        await receiveFiles(paths, destination);
+        await receiveFiles(paths, destination, reportFastSuccess: false);
       } catch (e) {
         if (mounted) message(e.toString(), error: true);
       }
@@ -1850,64 +2585,37 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     if (!acceptsTouchDrop(destination)) return;
     final (doc, entries) = touchDrag!;
     touchDrag = null;
-    await run(() async {
-      final updated = await service.transferEntries(
-        doc,
-        entries,
-        destination,
-        move: true,
-      );
-      refreshDocument(updated);
-      message('已移动 ${entries.length} 个项目');
-    }, title: '正在移动文件');
-  }
-
-  Future<void> prepareMacDrag(ArchiveEntry entry, Rect frame) async {
-    if (busy || !entry.safe || (!entry.directory && !entry.canExtract)) return;
-    final doc = document!;
-    final entries = selectedPaths.contains(entry.path) ? selection : [entry];
-    final roots = topLevelEntries(entries);
-    final bytes = roots.fold<int>(
-      0,
-      (sum, e) => sum + (doc.index.sizes[e.normalized] ?? e.size),
+    await run(
+      () async {
+        final updated = await service.transferEntries(
+          doc,
+          entries,
+          destination,
+          move: true,
+        );
+        refreshDocument(updated);
+        message('已移动 ${entries.length} 个项目');
+      },
+      title: '正在移动文件',
+      reportFastSuccess: false,
     );
-    final key = '${doc.path}\u0000${roots.map((e) => e.path).join('\u0000')}';
-    if (bytes > 512 * 1024 && !transferExports.containsKey(key)) return;
-    final token = ++dragPreparationRequest;
-    try {
-      final paths = await observed(
-        '正在准备拖拽文件',
-        () => exported(doc, roots),
-        success: '拖拽文件已准备好',
-        current: () => document == doc && token == dragPreparationRequest,
-        reportFastSuccess: false,
-      );
-      if (!mounted ||
-          busy ||
-          document != doc ||
-          token != dragPreparationRequest) {
-        return;
-      }
-      armedDrag = (doc, roots);
-      await desktop.prepareFileDrag(
-        paths,
-        movable: doc.writable,
-        frame: [frame.left, frame.top, frame.width, frame.height],
-      );
-    } catch (_) {
-      /* A failed export is reported if the user starts a drag. */
-    }
   }
 
   void clearPreparedDrag() {
-    warmTimer?.cancel();
-    ++dragPreparationRequest;
     armedDrag = null;
     if (widget.enableNativeTransfers && desktop.supportsQuickLook) {
       unawaited(
         desktop.prepareFileDrag([], movable: false, frame: [0, 0, 0, 0]),
       );
     }
+  }
+
+  bool dragResultNeedsFeedback() {
+    final startedAt = activeDragStartedAt;
+    activeDragStartedAt = null;
+    return startedAt != null &&
+        DateTime.now().difference(startedAt) >=
+            const Duration(milliseconds: 500);
   }
 
   void startTouchDrag(ArchiveEntry entry) {
@@ -1937,14 +2645,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           if (!mounted || document != doc || busy) return;
           armedDrag = (doc, roots);
           activeDrag = (doc, roots);
+          activeDragStartedAt = DateTime.now();
           await desktop.startFileDrag(paths, movable: doc.writable);
           if (mounted) setState(() => status = '拖拽 ${roots.length} 个项目');
         },
         success: '拖拽文件已准备好',
         current: () => document == doc,
+        reportFastSuccess: false,
       );
     } catch (e) {
       activeDrag = null;
+      activeDragStartedAt = null;
       if (mounted && document == doc && !busy) {
         message(
           e is PlatformException && e.code == 'drag_cancelled'
@@ -1957,6 +2668,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget transferable(ArchiveEntry entry, Widget child) {
+    if (inlineRenaming(entry)) return child;
     if (!widget.enableNativeTransfers) {
       return entry.directory ? dropTarget(entry.normalized, child) : child;
     }
@@ -1995,6 +2707,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             () => exported(doc, roots),
             success: '拖拽文件已准备好',
             current: () => document == doc,
+            reportFastSuccess: false,
           );
           final item = DragItem(
             suggestedName: entry.name,
@@ -2016,6 +2729,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       },
       child: DraggableWidget(
         onDragConfiguration: (configuration, session) {
+          final startedAt = DateTime.now();
           final first = configuration.items.first;
           final paths = ((first.item.localData as Map)['exports'] as List)
               .cast<String>();
@@ -2037,6 +2751,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ? '目标不接受此拖拽'
                     : '拖拽完成：${paths.length} 个项目',
                 error: result == DropOperation.forbidden,
+                showFeedback:
+                    result == DropOperation.forbidden ||
+                    result == DropOperation.none ||
+                    result == DropOperation.userCancelled ||
+                    DateTime.now().difference(startedAt) >=
+                        const Duration(milliseconds: 500),
               );
             }
           }
@@ -2063,6 +2783,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   KeyEventResult handleFileKey(FocusNode node, KeyEvent event) {
     if (!node.hasPrimaryFocus ||
+        marqueeSelecting ||
         searchFocus.hasFocus ||
         busy ||
         document == null ||
@@ -2070,6 +2791,41 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       return KeyEventResult.ignored;
     }
     final keys = HardwareKeyboard.instance;
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    final enter =
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (renamingEntry != null) return KeyEventResult.ignored;
+    if ((!mac &&
+            event.logicalKey == LogicalKeyboardKey.f2 &&
+            !keys.isMetaPressed &&
+            !keys.isControlPressed &&
+            !keys.isAltPressed) ||
+        (mac &&
+            enter &&
+            !keys.isMetaPressed &&
+            !keys.isControlPressed &&
+            !keys.isAltPressed &&
+            !keys.isShiftPressed)) {
+      renameSelection();
+      return KeyEventResult.handled;
+    }
+    if ((mac ? keys.isMetaPressed : keys.isControlPressed) &&
+        !keys.isShiftPressed &&
+        !keys.isAltPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        handleMenuCommand('openSelection');
+        return KeyEventResult.handled;
+      }
+      if (mac && event.logicalKey == LogicalKeyboardKey.keyO) {
+        openCommand();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        handleMenuCommand('enclosingFolder');
+        return KeyEventResult.handled;
+      }
+    }
     if (keys.isMetaPressed || keys.isControlPressed) {
       if (event.logicalKey == LogicalKeyboardKey.keyC) {
         copyFiles();
@@ -2133,7 +2889,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       if (parentEntry != null) select(parentEntry);
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.enter && selected != null) {
+    if (!mac &&
+        enter &&
+        selected != null &&
+        !keys.isMetaPressed &&
+        !keys.isControlPressed &&
+        !keys.isAltPressed) {
       openEntry(selected!);
       return KeyEventResult.handled;
     }
@@ -2207,6 +2968,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     if (mounted && token == previewRequest) {
       setState(() => selectedApplication = app);
     }
+    if (!entry.canExtract || !desktop.supportsFileIntegration) return;
+    try {
+      final apps = await desktop.applicationsForFile(entry.name);
+      if (mounted && token == previewRequest) {
+        setState(() {
+          applicationMenuName = entry.name;
+          menuApplications = apps;
+        });
+      }
+    } catch (_) {
+      // The application chooser remains available if discovery fails.
+    }
   }
 
   Future<void> updateSystemPreview(ArchiveEntry entry, int token) async {
@@ -2233,6 +3006,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         '正在打开文件',
         () => service.prepareExternal(document!, entry),
         success: '文件已准备好：${entry.name}',
+        reportFastSuccess: false,
+        reportSuccess: false,
         current: () =>
             selectionToken == previewRequest && request == systemPreviewRequest,
       );
@@ -2271,20 +3046,42 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   @override
   Widget build(BuildContext context) => AppLanguageScope(
     languageCode: settings.locale.languageCode,
-    child: workspaceBody(context),
+    child: Builder(
+      builder: (context) => propertyWindowData == null
+          ? workspaceBody(context)
+          : Scaffold(
+              key: const ValueKey('properties-window-page'),
+              backgroundColor: context.theme.colors.card,
+              body: Column(
+                children: [
+                  if (propertyActionError != null)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: AppText(
+                        propertyActionError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: inspectorPanel(
+                      summaryLayout: true,
+                      inProperties: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    ),
   );
 
   Widget workspaceBody(BuildContext context) => CallbackShortcuts(
     bindings: {
+      ...menuShortcutBindings,
       const SingleActivator(LogicalKeyboardKey.comma, meta: true): openSettings,
       const SingleActivator(LogicalKeyboardKey.comma, control: true):
           openSettings,
-      const SingleActivator(LogicalKeyboardKey.keyO, meta: true): () {
-        if (!busy) pickArchive();
-      },
-      const SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
-        if (!busy) pickArchive();
-      },
       const SingleActivator(LogicalKeyboardKey.arrowLeft, alt: true): goBack,
       const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () =>
           closeTab(document?.path),
@@ -2304,6 +3101,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               encoding: document?.encoding ?? settings.archive.readEncoding,
               writable: document?.writable ?? false,
               hasSelection: selection.isNotEmpty,
+              textEditing: menuTextEditing,
+              menus: applicationMenus,
             ),
           );
           final desktopLayout = constraints.maxWidth >= 800;
@@ -2317,7 +3116,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             (constraints.maxWidth * .32).clamp(220.0, double.infinity),
           );
           return ListenableBuilder(
-            listenable: feedback,
+            listenable: Listenable.merge([feedback, auxiliaryModalDepth]),
             builder: (_, _) => Stack(
               children: [
                 Scaffold(
@@ -2332,6 +3131,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       child: Column(
                         children: [
                           toolbar(desktopLayout),
+                          if (desktopLayout &&
+                              compactSearchOpen &&
+                              document != null)
+                            desktopSearchBar(),
                           Expanded(
                             child: Scaffold(
                               key: contentScaffold,
@@ -2386,6 +3189,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                                           emptyWorkspace(),
                                                         )
                                                       : FileContextMenu(
+                                                          onProperties: busy
+                                                              ? null
+                                                              : () {
+                                                                  clearSelection();
+                                                                  showProperties();
+                                                                },
                                                           onNewFolder:
                                                               busy ||
                                                                   !document!
@@ -2450,6 +3259,20 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     ),
                   ),
                 ),
+                Positioned.fill(
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: workspaceFeedback(desktopLayout),
+                  ),
+                ),
+                if (auxiliaryModalDepth.value > 0)
+                  Positioned.fill(
+                    child: Focus(
+                      autofocus: true,
+                      onKeyEvent: (_, _) => KeyEventResult.handled,
+                      child: const AbsorbPointer(child: SizedBox.expand()),
+                    ),
+                  ),
               ],
             ),
           );
@@ -2458,10 +3281,49 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
+  Map<ShortcutActivator, VoidCallback> get menuShortcutBindings {
+    const keys = {
+      'n': LogicalKeyboardKey.keyN,
+      'o': LogicalKeyboardKey.keyO,
+      'e': LogicalKeyboardKey.keyE,
+      'i': LogicalKeyboardKey.keyI,
+      'f': LogicalKeyboardKey.keyF,
+      '1': LogicalKeyboardKey.digit1,
+      '2': LogicalKeyboardKey.digit2,
+      '3': LogicalKeyboardKey.digit3,
+      '4': LogicalKeyboardKey.digit4,
+      '[': LogicalKeyboardKey.bracketLeft,
+      ']': LogicalKeyboardKey.bracketRight,
+      '=': LogicalKeyboardKey.equal,
+      '-': LogicalKeyboardKey.minus,
+      '↑': LogicalKeyboardKey.arrowUp,
+      '↓': LogicalKeyboardKey.arrowDown,
+    };
+    final bindings = <ShortcutActivator, VoidCallback>{};
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    void collect(List<ApplicationMenuItem> items) {
+      for (final item in items) {
+        if (item.children != null) collect(item.children!);
+        final key = keys[item.key];
+        if (key == null || item.command == null) continue;
+        bindings[SingleActivator(
+          key,
+          meta: mac && item.modifiers.contains('command'),
+          control: !mac && item.modifiers.contains('command'),
+          shift: item.modifiers.contains('shift'),
+        )] = () =>
+            handleMenuCommand(item.command!);
+      }
+    }
+
+    collect(applicationMenus);
+    return bindings;
+  }
+
   Widget splitterLine(String key) => Container(
     key: ValueKey('$key-line'),
     width: 1,
-    color: desktopColor(context, 0xffd8d8d8, 0xff414248),
+    color: context.theme.colors.border,
   );
 
   Widget splitterRow({
@@ -2550,9 +3412,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                     key: ValueKey('column-$parent'),
                     decoration: BoxDecoration(
                       border: Border(
-                        right: BorderSide(
-                          color: desktopColor(context, 0xffdedede, 0xff414248),
-                        ),
+                        right: BorderSide(color: context.theme.colors.border),
                       ),
                     ),
                     child: Column(
@@ -2565,13 +3425,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                             horizontal:
                                 listInset + (iconSize * .25).clamp(3.0, 10.0),
                           ),
-                          color: desktopColor(context, 0xfff7f7f7, 0xff292a2e),
+                          color: context.theme.colors.muted,
                           child: AppText(
                             parent.isEmpty
                                 ? p.basename(document!.path)
                                 : p.posix.basename(parent),
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: muted),
+                            style: TextStyle(fontSize: 11, color: muted),
                           ),
                         ),
                         Expanded(
@@ -2603,7 +3463,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       return Center(
         child: AppText(
           search.text.isNotEmpty && parent == folder ? '没有匹配的文件' : '空文件夹',
-          style: const TextStyle(fontSize: 12, color: muted),
+          style: TextStyle(fontSize: 12, color: muted),
         ),
       );
     }
@@ -2614,27 +3474,32 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       parent,
       () => ScrollController(),
     );
-    return ListView.builder(
-      controller: controller,
-      scrollCacheExtent: ScrollCacheExtent.pixels(0),
-      addAutomaticKeepAlives: false,
-      padding: const EdgeInsets.all(listInset),
-      itemExtent: rowHeight,
-      itemCount: items.length + (items.remainingCount > 0 ? 1 : 0),
-      itemBuilder: (_, i) => i == items.length
-          ? remainingItems(parent, items)
-          : row(
-              items[i],
-              true,
-              columnParent: parent,
-              joinPrevious: i > 0 && selectedPaths.contains(items[i - 1].path),
-              joinNext:
-                  i + 1 < items.length &&
-                  selectedPaths.contains(items[i + 1].path),
-              iconSize: rowIconSize,
-              horizontalPadding: rowPadding,
-              height: rowHeight,
-            ),
+    return fileSelectionArea(
+      ListView.builder(
+        controller: controller,
+        scrollCacheExtent: ScrollCacheExtent.pixels(0),
+        addAutomaticKeepAlives: false,
+        padding: const EdgeInsets.all(listInset),
+        itemExtent: rowHeight,
+        itemCount: items.length + (items.remainingCount > 0 ? 1 : 0),
+        itemBuilder: (_, i) => i == items.length
+            ? remainingItems(parent, items)
+            : row(
+                items[i],
+                true,
+                columnParent: parent,
+                joinPrevious:
+                    i > 0 && selectedPaths.contains(items[i - 1].path),
+                joinNext:
+                    i + 1 < items.length &&
+                    selectedPaths.contains(items[i + 1].path),
+                iconSize: rowIconSize,
+                horizontalPadding: rowPadding,
+                height: rowHeight,
+              ),
+      ),
+      controller,
+      parent: parent,
     );
   }
 
@@ -2685,6 +3550,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     Widget child, {
     String? columnParent,
   }) => FileContextMenu(
+    enabled: !inlineRenaming(entry),
+    onProperties: busy ? null : showProperties,
     onSelect: busy
         ? null
         : () {
@@ -2714,6 +3581,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         : () => pasteInto(entry.directory ? entry.normalized : folder),
     onExtract: busy || !entry.safe ? null : () => extract(onlySelected: true),
     onDelete: busy || !document!.writable ? null : deleteSelection,
+    onRename: busy || !document!.writable || selectedPaths.length > 1
+        ? null
+        : renameSelection,
     onNewFolder: busy || !document!.writable
         ? null
         : () => newEntry(
@@ -2776,6 +3646,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   Widget treeContext(ArchiveFolder node, Widget child) {
     if (node.path.isEmpty) {
       return FileContextMenu(
+        onProperties: busy
+            ? null
+            : () {
+                clearSelection();
+                navigate('');
+                showProperties();
+              },
         onOpen: busy ? null : () => navigate(''),
         onPaste: busy || !document!.writable ? null : () => pasteInto(''),
         onNewFolder: busy || !document!.writable
@@ -2795,6 +3672,148 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       node.path,
       contextMenu(entry, child, columnParent: parent),
     );
+  }
+
+  Future<void> showProperties({bool archiveOverview = false}) async {
+    final doc = document;
+    if (doc == null) return;
+    final targetFolder = archiveOverview ? '' : folder;
+    final targetSelection = archiveOverview
+        ? <ArchiveEntry>[]
+        : List<ArchiveEntry>.of(selection);
+    final key = jsonEncode([
+      doc.path,
+      targetFolder,
+      targetSelection.map((entry) => entry.path).toList(),
+    ]);
+    final transport = propertiesWindows.putIfAbsent(
+      key,
+      () =>
+          widget.propertiesWindowFactory?.call() ??
+          PropertiesWindowTransport(settings: settings),
+    );
+    Map<String, dynamic> snapshot() => archivePropertiesSnapshot(
+      tabFor(doc.path)?.document ?? doc,
+      targetFolder,
+      targetSelection,
+    );
+    try {
+      Future<Map<String, dynamic>> action(
+        String action,
+        Map<String, dynamic> data,
+      ) async {
+        if (!mounted || tabFor(doc.path) == null) throw StateError('操作已取消');
+        if (action == 'saveComment') {
+          final updated = await service.writeComment(
+            tabFor(doc.path)!.document,
+            data['text'] as String,
+            original: data['original'] as String,
+          );
+          if (!mounted) throw StateError('操作已取消');
+          setState(() {
+            tabFor(doc.path)!.document = updated;
+            if (document?.path == doc.path) document = updated;
+          });
+          message('注释已保存');
+        } else {
+          activateTab(tabFor(doc.path));
+          navigate(targetFolder);
+          setState(() {
+            selectedPaths
+              ..clear()
+              ..addAll(targetSelection.map((entry) => entry.path));
+            selected = targetSelection.firstOrNull;
+          });
+          if (action == 'open') await openSelection();
+          if (action == 'extract') {
+            await extract(
+              onlySelected: targetSelection.isNotEmpty,
+              currentFolder: targetSelection.isEmpty && targetFolder.isNotEmpty,
+            );
+          }
+          if (action == 'extractNamed') await extract(namedFolder: true);
+        }
+        return transport.payload(snapshot());
+      }
+
+      Future<void> showInline() async {
+        await transport.hide();
+        if (!mounted) return;
+        await showAppDialog<void>(
+          context: context,
+          languageCode: settings.locale.languageCode,
+          barrierDismissible: false,
+          builder: (_) => InlinePropertiesDialog(
+            settings: settings,
+            data: snapshot(),
+            onAction: action,
+          ),
+        );
+        if (mounted) fileFocus.requestFocus();
+      }
+
+      if (!settings.separateWindows || MediaQuery.sizeOf(context).width < 800) {
+        await showInline();
+        return;
+      }
+      final shown = await transport.show(snapshot(), action);
+      if (!shown && mounted) {
+        if (!settings.separateWindows) {
+          await showInline();
+        } else {
+          message('属性窗口未能启动，请重试。', error: true);
+        }
+      }
+    } catch (error) {
+      if (mounted) message(error.toString(), error: true);
+    }
+  }
+
+  void applyPropertiesData(Map<String, dynamic> data) {
+    propertyWindowData = data;
+    document = archivePropertiesDocument(data);
+    folder = data['folder'] as String;
+    selectedPaths
+      ..clear()
+      ..addAll(archivePropertiesSelection(data).map((entry) => entry.path));
+    selected = archivePropertiesSelection(data).firstOrNull;
+    gallery = true;
+  }
+
+  Future<bool> savePropertyDrafts() async {
+    for (final draft in commentDrafts.values) {
+      await draft.save();
+      if (draft.editing) return false;
+    }
+    return true;
+  }
+
+  @override
+  void didUpdateWidget(covariant ArchiveWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.propertiesData != null &&
+        !identical(oldWidget.propertiesData, widget.propertiesData)) {
+      applyPropertiesData(widget.propertiesData!);
+    }
+  }
+
+  Future<void> propertyAction(
+    String action, [
+    Map<String, dynamic> data = const {},
+  ]) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      propertyActionError = null;
+    });
+    try {
+      final updated = await widget.propertiesAction!(action, data);
+      if (mounted) setState(() => applyPropertiesData(updated));
+    } catch (error) {
+      if (mounted) setState(() => propertyActionError = error.toString());
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   Widget sidebar() {
@@ -2844,20 +3863,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget sidebarContent(List<(_ArchiveTab, ArchiveFolder, int)> rows) {
     return Container(
-      decoration: BoxDecoration(
-        color: desktopColor(context, 0xfff3f3f3, 0xff27282b),
-      ),
+      decoration: BoxDecoration(color: context.theme.colors.muted),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(12, 12, 12, 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: AppText('目录', style: TextStyle(fontSize: 11, color: muted)),
           ),
           Expanded(
             child: document == null
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
+                ? Padding(
+                    padding: const EdgeInsets.all(12),
                     child: AppText(
                       '未打开压缩包',
                       style: TextStyle(color: muted, fontSize: 12),
@@ -2900,11 +3917,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(5),
                                   color: active && folder == node.path
-                                      ? desktopColor(
-                                          context,
-                                          0xffdedede,
-                                          0xff464646,
-                                        )
+                                      ? context.theme.colors.border
                                       : Colors.transparent,
                                 ),
                                 height: 29,
@@ -2939,11 +3952,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                                     : CupertinoIcons
                                                           .chevron_right,
                                                 size: 10,
-                                                color: desktopColor(
-                                                  context,
-                                                  0xff646464,
-                                                  0xffbbbbc2,
-                                                ),
+                                                color: context
+                                                    .theme
+                                                    .colors
+                                                    .mutedForeground,
                                               ),
                                             ),
                                     ),
@@ -3024,7 +4036,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       key: const ValueKey('archive-tabs'),
       height: 36,
       decoration: BoxDecoration(
-        color: desktopColor(context, 0xffe8e8eb, 0xff242529),
+        color: context.theme.colors.muted,
         border: Border(
           bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
@@ -3042,7 +4054,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 margin: const EdgeInsets.fromLTRB(3, 4, 0, 0),
                 decoration: BoxDecoration(
                   color: tab.document.path == document?.path
-                      ? desktopColor(context, 0xffffffff, 0xff35363b)
+                      ? context.theme.colors.card
                       : null,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(8),
@@ -3101,22 +4113,285 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget applicationMenu() {
-    final available = !busy && !closing;
+  List<ApplicationMenuItem> get applicationMenus {
+    final available =
+        !busy &&
+        auxiliaryModalDepth.value == 0 &&
+        !closing &&
+        renamingEntry == null &&
+        !prompting &&
+        (ModalRoute.isCurrentOf(context) ?? true);
     final hasDocument = available && document != null;
     final writable = hasDocument && document!.writable;
-    DesktopMenuAction action(
+    final entries = selection;
+    final hasSelection = hasDocument && entries.isNotEmpty;
+    final roots = topLevelEntries(entries);
+    final canTransfer =
+        writable &&
+        hasSelection &&
+        entries.every(
+          (entry) => entry.directory ? entry.safe : entry.canExtract,
+        ) &&
+        (acceptsSelectionDestination('', roots) ||
+            document!.index.byNormalized.values
+                .where((entry) => entry.directory)
+                .any(
+                  (entry) =>
+                      acceptsSelectionDestination(entry.normalized, roots),
+                ));
+    final one = hasSelection && entries.length == 1 ? entries.single : null;
+    final canOpen =
+        hasSelection &&
+        entries.any((entry) => entry.directory || entry.canExtract);
+    final canOpenWith =
+        one?.canExtract == true && desktop.supportsFileIntegration;
+    final textEditing = menuTextEditing;
+    const divider = ApplicationMenuItem.separator();
+    ApplicationMenuItem action(
       String title,
       String command,
       bool enabled, {
       bool checked = false,
-    }) => DesktopMenuAction(
+      String key = '',
+      List<String> modifiers = const ['command'],
+    }) => ApplicationMenuItem(
       title,
-      enabled ? () => handleMenuCommand(command) : null,
+      command: command,
+      enabled: enabled,
       checked: checked,
+      key: key,
+      modifiers: modifiers,
     );
-    DesktopMenuAction submenu(String title, List<DesktopMenuAction> children) =>
-        DesktopMenuAction(title, null, children: children);
+    ApplicationMenuItem submenu(
+      String title,
+      List<ApplicationMenuItem> children,
+    ) => ApplicationMenuItem(title, children: children);
+    return [
+      submenu('文件', [
+        action(
+          '打开…',
+          'open',
+          available && (!hasSelection || canOpen || textEditing),
+          key: 'o',
+        ),
+        action(
+          '打开压缩包…',
+          'openArchive',
+          available,
+          key: 'o',
+          modifiers: const ['command', 'shift'],
+        ),
+        submenu('最近打开', [
+          if (recent.isEmpty)
+            const ApplicationMenuItem('暂无最近打开的文件', enabled: false),
+          for (final path in recent.take(10))
+            action(p.basename(path), 'recent:$path', available),
+          divider,
+          action('清除菜单', 'clearRecent', recent.isNotEmpty),
+        ]),
+        divider,
+        action(
+          '快速创建 ZIP',
+          'quickZip',
+          available && (availableCreateFormats?.contains('zip') ?? true),
+        ),
+        action(
+          '创建压缩包…',
+          'create',
+          available && createFormats.isNotEmpty,
+          key: 'n',
+        ),
+        action(
+          '新建文件夹…',
+          'newFolder',
+          writable,
+          key: 'n',
+          modifiers: const ['command', 'shift'],
+        ),
+        action('新建空白文档…', 'newDocument', writable),
+        action('添加文件…', 'addFiles', writable),
+        action('添加文件夹…', 'addFolder', writable),
+        divider,
+        action('打开所选项目', 'openSelection', canOpen, key: '↓'),
+        ApplicationMenuItem(
+          '打开方式',
+          enabled:
+              canOpenWith ||
+              (one?.canExtract == true && isReadableArchivePath(one!.name)),
+          children: [
+            if (one != null && isReadableArchivePath(one.name))
+              action('在 HiZip 中打开', 'openInHiZip', one.canExtract),
+            if (canOpenWith) ...[
+              for (final app
+                  in applicationMenuName == one!.name
+                      ? menuApplications
+                      : <FileApplication>[])
+                action(
+                  '${app.name}${app.isDefault ? '（默认）' : ''}',
+                  'openWith:${app.path}',
+                  true,
+                ),
+              divider,
+              action('其他…', 'chooseApplication', true),
+            ],
+          ],
+        ),
+        if (desktop.supportsQuickLook)
+          action(
+            '快速查看',
+            'quickLook',
+            one?.canExtract == true && !textEditing,
+            key: ' ',
+            modifiers: const [],
+          ),
+        divider,
+        action(
+          '解压所选…',
+          'extractSelection',
+          hasSelection && entries.every((entry) => entry.safe),
+        ),
+        action('解压当前文件夹…', 'extractFolder', hasDocument && folder.isNotEmpty),
+        action('解压全部…', 'extract', hasDocument, key: 'e'),
+        action('解压全部到同名文件夹…', 'extractNamed', hasDocument),
+        action('校验压缩包', 'verify', hasDocument),
+        divider,
+        action('属性', 'properties', hasDocument, key: 'i'),
+        action('压缩包属性', 'archiveProperties', hasDocument),
+        divider,
+        action('关闭标签页', 'closeArchive', hasDocument, key: 'w'),
+      ]),
+      submenu('编辑', [
+        action('撤销', 'undo', textEditing, key: 'z'),
+        action(
+          '重做',
+          'redo',
+          textEditing,
+          key: 'z',
+          modifiers: const ['command', 'shift'],
+        ),
+        divider,
+        action('剪切', 'cut', textEditing, key: 'x'),
+        action(
+          '复制',
+          'copy',
+          textEditing || (hasSelection && entries.every((entry) => entry.safe)),
+          key: 'c',
+        ),
+        action('粘贴', 'paste', textEditing || writable, key: 'v'),
+        action('全选', 'selectAll', textEditing || hasDocument, key: 'a'),
+        divider,
+        action('移动到…', 'moveTo', canTransfer),
+        action('复制到…', 'copyTo', canTransfer),
+        action('重命名…', 'rename', writable && one != null),
+        action('删除…', 'delete', writable && hasSelection, key: '\u{8}'),
+        divider,
+        action('搜索', 'search', hasDocument, key: 'f'),
+      ]),
+      submenu('显示', [
+        action('图标视图', 'grid', hasDocument, checked: grid, key: '1'),
+        action(
+          '列表视图',
+          'list',
+          hasDocument,
+          checked: !grid && !columns && !gallery,
+          key: '2',
+        ),
+        action('多栏视图', 'columns', hasDocument, checked: columns, key: '3'),
+        action('画廊视图', 'gallery', hasDocument, checked: gallery, key: '4'),
+        divider,
+        action('预览栏', 'inspector', hasDocument, checked: inspector),
+        action('任务列表', 'tasks', !closing, checked: queueExpanded),
+        submenu('排序方式', [
+          for (final (column, title) in [
+            ('name', '名称'),
+            ('size', '大小'),
+            ('modified', '修改日期'),
+            ('kind', '种类'),
+          ])
+            action(
+              title,
+              'sort:$column',
+              hasDocument,
+              checked: listSortColumn == column,
+            ),
+          divider,
+          action('升序', 'ascending', hasDocument, checked: listSortAscending),
+          action('降序', 'descending', hasDocument, checked: !listSortAscending),
+        ]),
+        action(
+          '放大图标',
+          'largerIcons',
+          hasDocument &&
+              iconSize < BrowsingPreferences.maxIconSize(browsingView),
+          key: '=',
+        ),
+        action(
+          '缩小图标',
+          'smallerIcons',
+          hasDocument &&
+              iconSize > BrowsingPreferences.minIconSize(browsingView),
+          key: '-',
+        ),
+        divider,
+        submenu('编码', [
+          for (final encoding in archiveEncodings.entries)
+            action(
+              encoding.value,
+              'encoding:${encoding.key}',
+              hasDocument,
+              checked: document?.encoding == encoding.key,
+            ),
+        ]),
+      ]),
+      submenu('前往', [
+        action('返回', 'back', hasDocument && history.isNotEmpty, key: '['),
+        action(
+          '上级文件夹',
+          'enclosingFolder',
+          hasDocument && folder.isNotEmpty && !textEditing,
+          key: '↑',
+        ),
+        action('压缩包根目录', 'archiveRoot', hasDocument && folder.isNotEmpty),
+        divider,
+        action(
+          '上一个标签页',
+          'previousTab',
+          available && tabs.length > 1,
+          key: '[',
+          modifiers: const ['command', 'shift'],
+        ),
+        action(
+          '下一个标签页',
+          'nextTab',
+          available && tabs.length > 1,
+          key: ']',
+          modifiers: const ['command', 'shift'],
+        ),
+      ]),
+    ];
+  }
+
+  Widget applicationMenu() {
+    final mac = defaultTargetPlatform == TargetPlatform.macOS;
+    DesktopMenuAction adapt(ApplicationMenuItem item) {
+      if (item.separator) return const DesktopMenuAction.separator();
+      final shortcut = item.key.isEmpty
+          ? null
+          : '${item.modifiers.contains('command') ? (mac ? '⌘' : 'Ctrl+') : ''}'
+                '${item.modifiers.contains('shift') ? (mac ? '⇧' : 'Shift+') : ''}'
+                '${item.key == ' ' ? appText(context, '空格') : item.key.toUpperCase()}';
+      return DesktopMenuAction(
+        item.title,
+        item.enabled && item.command != null
+            ? () => handleMenuCommand(item.command!)
+            : null,
+        children: item.children?.map(adapt).toList(),
+        checked: item.checked,
+        enabled: item.enabled,
+        shortcut: shortcut,
+      );
+    }
+
     return FileContextMenu(
       key: const ValueKey('application-menu'),
       primaryClick: true,
@@ -3130,56 +4405,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         ),
       ),
       actions: [
-        submenu('文件', [
-          action('打开…', 'open', available),
-          submenu('最近打开', [
-            if (recent.isEmpty) const DesktopMenuAction('暂无最近打开的文件', null),
-            for (final path in recent.take(10))
-              DesktopMenuAction(
-                p.basename(path),
-                available ? () => loadArchive(path) : null,
-              ),
-            DesktopMenuAction('清除菜单', () => setState(recent.clear)),
-          ]),
-          action('创建 ZIP…', 'create', available),
-          submenu('创建压缩包', [
-            for (final format in writableArchiveFormats.entries)
-              action(format.value, 'create:${format.key}', available),
-          ]),
-          action('解压全部…', 'extract', hasDocument),
-          action('解压全部到同名文件夹…', 'extractNamed', hasDocument),
-          action('新建文件夹…', 'newFolder', writable),
-          action('新建空白文档…', 'newDocument', writable),
-          action('删除…', 'delete', writable && selectedPaths.isNotEmpty),
-          submenu('编码', [
-            for (final encoding in archiveEncodings.entries)
-              action(
-                encoding.value,
-                'encoding:${encoding.key}',
-                hasDocument,
-                checked: document?.encoding == encoding.key,
-              ),
-          ]),
-          action('关闭标签页', 'closeArchive', hasDocument),
-        ]),
-        submenu('编辑', [
-          action('复制', 'copy', hasDocument && selectedPaths.isNotEmpty),
-          action('粘贴', 'paste', writable),
-          action('全选', 'selectAll', hasDocument),
-        ]),
-        submenu('显示', [
-          action(
-            '列表视图',
-            'list',
-            hasDocument,
-            checked: !grid && !columns && !gallery,
-          ),
-          action('图标视图', 'grid', hasDocument, checked: grid),
-          action('多栏视图', 'columns', hasDocument, checked: columns),
-          action('画廊视图', 'gallery', hasDocument, checked: gallery),
-          action('预览栏', 'inspector', hasDocument, checked: inspector),
-        ]),
-        action('设置…', 'settings', true),
+        ...applicationMenus.map(adapt),
+        const DesktopMenuAction.separator(),
+        DesktopMenuAction('设置…', openSettings),
       ],
       child: const SizedBox(width: 30, height: 28),
     );
@@ -3187,17 +4415,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget toolbar(bool desktopLayout) => LayoutBuilder(
     builder: (context, constraints) {
-      final searchWidth = (constraints.maxWidth * .18).clamp(110.0, 180.0);
       return Container(
         key: const ValueKey('workspace-top-bar'),
-        height: windowChromeHeight(),
+        height: !desktopLayout && compactSearchOpen
+            ? windowChromeHeight().clamp(
+                desktopInputHeight(context) + 12,
+                double.infinity,
+              )
+            : windowChromeHeight(),
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+          color: context.theme.colors.muted,
           border: Border(
-            bottom: BorderSide(
-              color: desktopColor(context, 0xffdadada, 0xff414248),
-            ),
+            bottom: BorderSide(color: context.theme.colors.border),
           ),
         ),
         child: Stack(
@@ -3253,30 +4483,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                   : pathNavigation(),
                             ),
                             if (desktopLayout && document != null) ...[
-                              tool(
-                                '图标视图',
-                                CupertinoIcons.square_grid_2x2,
-                                () => changeView('grid'),
-                                active: grid,
-                              ),
-                              tool(
-                                '列表视图',
-                                CupertinoIcons.list_bullet,
-                                () => changeView('list'),
-                                active: !grid && !columns && !gallery,
-                              ),
-                              tool(
-                                '多栏视图',
-                                CupertinoIcons.rectangle_split_3x1,
-                                () => changeView('columns'),
-                                active: columns,
-                              ),
-                              tool(
-                                '画廊视图',
-                                CupertinoIcons.rectangle_stack,
-                                () => changeView('gallery'),
-                                active: gallery,
-                              ),
+                              viewModeSelector(),
                               const SizedBox(width: 8),
                               tool(
                                 '预览栏',
@@ -3294,30 +4501,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               ),
                             if (document != null) ...[
                               const SizedBox(width: 8),
-                              if (desktopLayout && compactSearchOpen)
-                                SizedBox(
-                                  key: const ValueKey('top-search-slot'),
-                                  width: searchWidth,
-                                  child: CallbackShortcuts(
-                                    bindings: {
-                                      const SingleActivator(
-                                        LogicalKeyboardKey.escape,
-                                      ): closeCompactSearch,
-                                    },
-                                    child: searchField(),
-                                  ),
-                                )
-                              else
-                                tool('搜索', FIcons.search, () {
-                                  setState(() => compactSearchOpen = true);
-                                  WidgetsBinding.instance.addPostFrameCallback((
-                                    _,
-                                  ) {
-                                    if (mounted && compactSearchOpen) {
-                                      searchFocus.requestFocus();
-                                    }
-                                  });
-                                }, active: search.text.isNotEmpty),
+                              tool(
+                                '搜索',
+                                FIcons.search,
+                                openSearch,
+                                active:
+                                    compactSearchOpen || search.text.isNotEmpty,
+                              ),
                               const SizedBox(width: 8),
                             ],
                             windowTrailingControls(),
@@ -3331,6 +4521,47 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       );
     },
   );
+
+  Widget desktopSearchBar() => Container(
+    key: const ValueKey('workspace-search-bar'),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    decoration: BoxDecoration(
+      color: context.theme.colors.muted,
+      border: Border(bottom: BorderSide(color: context.theme.colors.border)),
+    ),
+    child: CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): closeCompactSearch,
+      },
+      child: Row(
+        children: [
+          Expanded(child: searchField()),
+          const SizedBox(width: 8),
+          tool('关闭搜索', CupertinoIcons.xmark, closeCompactSearch),
+        ],
+      ),
+    ),
+  );
+
+  Widget viewModeSelector() {
+    Widget button(String title, IconData icon, String view) =>
+        DesktopIconButton(
+          tooltip: title,
+          onPressed: () => changeView(view),
+          active: browsingView == view,
+          icon: Icon(icon, size: 17),
+        );
+    return Row(
+      key: const ValueKey('view-mode-selector'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button('图标视图', CupertinoIcons.square_grid_2x2, 'grid'),
+        button('列表视图', CupertinoIcons.list_bullet, 'list'),
+        button('多栏视图', CupertinoIcons.rectangle_split_3x1, 'columns'),
+        button('画廊视图', CupertinoIcons.rectangle_stack, 'gallery'),
+      ],
+    );
+  }
 
   Widget tool(
     String title,
@@ -3356,7 +4587,11 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         Positioned(
           left: 24,
           right: 24,
-          bottom: 20,
+          bottom:
+              20 +
+              (document != null && !inspectorVisible
+                  ? _selectionStripHeight
+                  : 0),
           child: IgnorePointer(
             child: ExcludeSemantics(
               child: Align(
@@ -3370,7 +4605,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                           text: 'Hi',
                           style: TextStyle(
                             color: Theme.of(context).colorScheme.primary
-                                .withValues(alpha: .5),
+                                .withValues(
+                                  alpha:
+                                      Theme.of(context).brightness ==
+                                          Brightness.light
+                                      ? .8
+                                      : .5,
+                                ),
                           ),
                         ),
                         const TextSpan(text: 'Zip'),
@@ -3383,7 +4624,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       fontWeight: FontWeight.w800,
                       letterSpacing: -4,
                       height: 1,
-                      color: desktopColor(context, 0x08000000, 0x0dffffff),
+                      color: desktopColor(context, 0xffb0b0b0, 0x0dffffff),
                     ),
                   ),
                 ),
@@ -3400,20 +4641,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const AppText('未打开压缩包', style: TextStyle(color: muted, fontSize: 13)),
+        AppText('未打开压缩包', style: TextStyle(color: muted, fontSize: 13)),
         const SizedBox(height: 14),
         DesktopButton(
           onPressed: busy ? null : pickArchive,
           child: const AppText('打开压缩包'),
         ),
-        if (!service.supported)
-          const Padding(
-            padding: EdgeInsets.only(top: 12),
-            child: AppText(
-              '当前平台暂不支持压缩文件操作',
-              style: TextStyle(color: muted, fontSize: 12),
-            ),
-          ),
       ],
     ),
   );
@@ -3448,7 +4681,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 i < (folder.isEmpty ? 0 : folder.split('/').length);
                 i++
               ) ...[
-                const Icon(CupertinoIcons.chevron_right, size: 9, color: muted),
+                Icon(CupertinoIcons.chevron_right, size: 9, color: muted),
                 crumb(
                   folder.split('/')[i],
                   () => navigate(folder.split('/').take(i + 1).join('/')),
@@ -3463,22 +4696,33 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget searchField() => SizedBox(
     key: const ValueKey('archive-search'),
-    height: 27,
-    child: FTextField(
-      control: FTextFieldControl.managed(controller: search),
+    height: desktopInputHeight(context),
+    child: DesktopTextField(
+      controller: search,
       focusNode: searchFocus,
-      size: FTextFieldSizeVariant.sm,
+      onTapOutside: (_) => closeCompactSearch(),
       hint: translateAppText('搜索', settings.locale.languageCode),
-      style: const FTextFieldStyleDelta.delta(
-        contentPadding: EdgeInsetsGeometryDelta.value(
-          EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      prefix: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Icon(
+          FIcons.search,
+          size: 13,
+          color: context.theme.colors.mutedForeground,
         ),
       ),
-      prefixBuilder: (_, _, _) => const Padding(
-        padding: EdgeInsets.only(left: 8, right: 4),
-        child: Icon(FIcons.search, size: 13, color: muted),
-      ),
-      clearable: (value) => value.text.isNotEmpty,
+      suffix: search.text.isEmpty
+          ? null
+          : ExcludeFocus(
+              child: DesktopIconButton(
+                key: const ValueKey('clear-archive-search'),
+                tooltip: '清除搜索',
+                onPressed: () {
+                  search.clear();
+                  searchFocus.requestFocus();
+                },
+                icon: const Icon(FIcons.x, size: 13),
+              ),
+            ),
     ),
   );
 
@@ -3503,14 +4747,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 ? Center(
                     child: AppText(
                       search.text.isEmpty ? '空文件夹' : '没有匹配的文件',
-                      style: const TextStyle(color: muted, fontSize: 12),
+                      style: TextStyle(color: muted, fontSize: 12),
                     ),
                   )
                 : gallery
                 ? galleryBrowser(items)
                 : LayoutBuilder(
                     builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 560;
                       final rowIconSize = iconSize;
                       final rowHeight = rowExtent(rowIconSize);
                       final rowPadding = (rowIconSize * .25).clamp(3.0, 10.0);
@@ -3532,139 +4775,149 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                             gridColumns;
                         final displaySize = iconSize.clamp(
                           1.0,
-                          (cellWidth - 24).clamp(1.0, double.infinity),
+                          (cellWidth - 32).clamp(1.0, double.infinity),
                         );
-                        final textScaler = MediaQuery.textScalerOf(context);
+                        final smallIcon = displaySize < 36;
+                        final nameHeight = gridTextHeight(
+                          context,
+                          'Ag汉字あ한\nAg汉字あ한',
+                          smallIcon ? 10 : 11,
+                        );
                         final tileHeight =
                             displaySize +
-                            (displaySize < 36 ? 13 : 27) +
-                            textScaler.scale(displaySize < 36 ? 10 : 11) * 2.6 +
-                            textScaler.scale(displaySize < 36 ? 9 : 10) * 1.3;
+                            (smallIcon ? 24 : 40) +
+                            nameHeight.clamp(
+                              desktopInputHeight(
+                                context,
+                                fontSize: smallIcon ? 10 : 11,
+                              ),
+                              double.infinity,
+                            );
                         gridTileExtent = tileHeight;
                         gridPadding = margin;
                         gridSpacing = spacing;
-                        return GridView.builder(
-                          controller: listScroll,
-                          scrollCacheExtent: ScrollCacheExtent.pixels(0),
-                          addAutomaticKeepAlives: false,
-                          padding: EdgeInsets.all(margin),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: gridColumns,
-                                mainAxisExtent: tileHeight,
-                                mainAxisSpacing: spacing,
-                                crossAxisSpacing: spacing,
-                              ),
-                          itemCount:
-                              items.length + (items.remainingCount > 0 ? 1 : 0),
-                          itemBuilder: (_, i) => i == items.length
-                              ? remainingItems(folder, items)
-                              : tile(items[i], displaySize: displaySize),
+                        return fileSelectionArea(
+                          GridView.builder(
+                            controller: listScroll,
+                            scrollCacheExtent: ScrollCacheExtent.pixels(0),
+                            addAutomaticKeepAlives: false,
+                            padding: EdgeInsets.all(margin),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: gridColumns,
+                                  mainAxisExtent: tileHeight,
+                                  mainAxisSpacing: spacing,
+                                  crossAxisSpacing: spacing,
+                                ),
+                            itemCount:
+                                items.length +
+                                (items.remainingCount > 0 ? 1 : 0),
+                            itemBuilder: (_, i) => i == items.length
+                                ? remainingItems(folder, items)
+                                : tile(items[i], displaySize: displaySize),
+                          ),
+                          listScroll,
                         );
                       }
-                      final metadataWidth = compact
-                          ? 0.0
-                          : listSizeWidth + listModifiedWidth + listKindWidth;
                       final availableWidth =
                           (constraints.maxWidth - 2 * (rowPadding + listInset))
-                              .clamp(160.0, double.infinity);
-                      final nameWidth = listColumnWidth(
-                        'name',
-                        availableWidth - metadataWidth,
-                      ).clamp(160.0, double.infinity);
-                      final contentWidth = nameWidth + metadataWidth;
-                      final listWidth =
-                          contentWidth + 2 * (rowPadding + listInset);
-                      return SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: SizedBox(
-                          width: listWidth > constraints.maxWidth
-                              ? listWidth
-                              : constraints.maxWidth,
-                          child: Column(
-                            children: [
-                              Container(
-                                height: 27,
-                                color: desktopColor(
-                                  context,
-                                  0xfff7f7f7,
-                                  0xff292a2e,
-                                ),
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: rowPadding + listInset,
-                                ),
-                                child: SizedBox(
-                                  width: contentWidth,
-                                  child: Row(
-                                    children: [
-                                      listHeaderCell('名称', 'name', nameWidth),
-                                      if (!compact) ...[
-                                        listHeaderCell(
-                                          '大小',
-                                          'size',
-                                          listSizeWidth,
-                                        ),
-                                        listHeaderCell(
-                                          '修改日期',
-                                          'modified',
-                                          listModifiedWidth,
-                                        ),
-                                        listHeaderCell(
-                                          '种类',
-                                          'kind',
-                                          listKindWidth,
-                                        ),
-                                      ],
-                                    ],
+                              .clamp(0.0, double.infinity);
+                      final layout = ListColumnLayout(
+                        availableWidth: availableWidth,
+                        size: listSizeWidth,
+                        modified: listModifiedWidth,
+                        kind: listKindWidth,
+                      );
+                      final compact = !layout.showMetadata;
+                      final nameWidth = layout.name;
+                      final kindWidth = layout.kind;
+                      final contentWidth = availableWidth;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            height: 27,
+                            color: context.theme.colors.muted,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: rowPadding + listInset,
+                            ),
+                            child: SizedBox(
+                              width: contentWidth,
+                              child: Row(
+                                children: [
+                                  listHeaderCell(
+                                    '名称',
+                                    'name',
+                                    nameWidth,
+                                    layout: layout,
                                   ),
-                                ),
+                                  if (!compact) ...[
+                                    listHeaderCell(
+                                      '大小',
+                                      'size',
+                                      listSizeWidth,
+                                      layout: layout,
+                                    ),
+                                    listHeaderCell(
+                                      '修改日期',
+                                      'modified',
+                                      listModifiedWidth,
+                                      layout: layout,
+                                    ),
+                                    listHeaderCell(
+                                      '种类',
+                                      'kind',
+                                      kindWidth,
+                                      layout: layout,
+                                    ),
+                                  ],
+                                ],
                               ),
-                              Expanded(
-                                child: ListView.builder(
-                                  controller: listScroll,
-                                  scrollCacheExtent: ScrollCacheExtent.pixels(
-                                    0,
-                                  ),
-                                  addAutomaticKeepAlives: false,
-                                  padding: const EdgeInsets.all(listInset),
-                                  itemExtent: rowHeight,
-                                  itemCount:
-                                      items.length +
-                                      (items.remainingCount > 0 ? 1 : 0),
-                                  itemBuilder: (_, i) => i == items.length
-                                      ? remainingItems(folder, items)
-                                      : row(
-                                          items[i],
-                                          compact,
-                                          joinPrevious:
-                                              i > 0 &&
-                                              selectedPaths.contains(
-                                                items[i - 1].path,
-                                              ),
-                                          joinNext:
-                                              i + 1 < items.length &&
-                                              selectedPaths.contains(
-                                                items[i + 1].path,
-                                              ),
-                                          iconSize: rowIconSize,
-                                          horizontalPadding: rowPadding,
-                                          height: rowHeight,
-                                          nameWidth: nameWidth,
-                                          sizeWidth: compact
-                                              ? null
-                                              : listSizeWidth,
-                                          modifiedWidth: compact
-                                              ? null
-                                              : listModifiedWidth,
-                                          kindWidth: compact
-                                              ? null
-                                              : listKindWidth,
-                                        ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
+                          Expanded(
+                            child: fileSelectionArea(
+                              ListView.builder(
+                                controller: listScroll,
+                                scrollCacheExtent: ScrollCacheExtent.pixels(0),
+                                addAutomaticKeepAlives: false,
+                                padding: const EdgeInsets.all(listInset),
+                                itemExtent: rowHeight,
+                                itemCount:
+                                    items.length +
+                                    (items.remainingCount > 0 ? 1 : 0),
+                                itemBuilder: (_, i) => i == items.length
+                                    ? remainingItems(folder, items)
+                                    : row(
+                                        items[i],
+                                        compact,
+                                        joinPrevious:
+                                            i > 0 &&
+                                            selectedPaths.contains(
+                                              items[i - 1].path,
+                                            ),
+                                        joinNext:
+                                            i + 1 < items.length &&
+                                            selectedPaths.contains(
+                                              items[i + 1].path,
+                                            ),
+                                        iconSize: rowIconSize,
+                                        horizontalPadding: rowPadding,
+                                        height: rowHeight,
+                                        nameWidth: nameWidth,
+                                        sizeWidth: compact
+                                            ? null
+                                            : listSizeWidth,
+                                        modifiedWidth: compact
+                                            ? null
+                                            : listModifiedWidth,
+                                        kindWidth: compact ? null : kindWidth,
+                                      ),
+                              ),
+                              listScroll,
+                            ),
+                          ),
+                        ],
                       );
                     },
                   ),
@@ -3699,7 +4952,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           ? Icon(
               entryIcon(e),
               size: size,
-              color: e.directory
+              color: selectedPaths.contains(e.path)
+                  ? entryForeground(e)
+                  : e.directory
                   ? const Color(0xff6d9cbe)
                   : const Color(0xff858b92),
             )
@@ -3728,9 +4983,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       ? desktopSelectionForeground(context, secondary: secondary)
       : (secondary ? muted : Theme.of(context).colorScheme.onSurface);
 
-  Widget listHeaderCell(String label, String column, double width) {
+  Widget listHeaderCell(
+    String label,
+    String column,
+    double width, {
+    required ListColumnLayout layout,
+  }) {
     final active = listSortColumn == column;
+    final resizable = layout.showMetadata && column != 'kind';
     return SizedBox(
+      key: ValueKey('list-header-$column'),
       width: width,
       height: 27,
       child: Stack(
@@ -3740,14 +5002,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             behavior: HitTestBehavior.opaque,
             onTap: busy ? null : () => sortList(column),
             child: Padding(
-              padding: const EdgeInsets.only(right: 8),
+              padding: EdgeInsets.only(
+                left: column == 'name' ? 0 : 8,
+                right: 8,
+              ),
               child: Row(
+                mainAxisAlignment: column == 'name'
+                    ? MainAxisAlignment.start
+                    : MainAxisAlignment.end,
                 children: [
                   Flexible(
                     child: AppText(
                       label,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, color: muted),
+                      style: TextStyle(fontSize: 11, color: muted),
                     ),
                   ),
                   if (active)
@@ -3762,26 +5031,48 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               ),
             ),
           ),
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            width: 8,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragUpdate: busy
-                  ? null
-                  : (details) => resizeListColumn(
-                      column,
-                      details.delta.dx,
-                      currentWidth: width,
+          if (resizable)
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              child: MouseRegion(
+                cursor: busy
+                    ? SystemMouseCursors.basic
+                    : SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  key: ValueKey('list-column-resizer-$column'),
+                  behavior: HitTestBehavior.opaque,
+                  dragStartBehavior: DragStartBehavior.down,
+                  onHorizontalDragStart: busy
+                      ? null
+                      : (details) {
+                          listColumnDragStart = details.globalPosition.dx;
+                          listColumnDragLayout = layout;
+                        },
+                  onHorizontalDragUpdate: busy
+                      ? null
+                      : (details) => resizeListColumn(
+                          column,
+                          details.globalPosition.dx - listColumnDragStart,
+                          layout: layout,
+                        ),
+                  onHorizontalDragEnd: busy
+                      ? null
+                      : (_) => finishListColumnResize(),
+                  onHorizontalDragCancel: busy ? null : finishListColumnResize,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Container(
+                      width: 1,
+                      margin: const EdgeInsets.symmetric(vertical: 5),
+                      color: Theme.of(context).dividerColor,
                     ),
-              onHorizontalDragEnd: busy
-                  ? null
-                  : (_) => saveBrowsingPreferences(),
-              child: const SizedBox(),
+                  ),
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -3796,16 +5087,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     children: [
       fileIcon(e, size: iconSize),
       SizedBox(width: (iconSize * .25).clamp(3.0, 8.0)),
-      Expanded(
-        child: Text(
-          e.name,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 12,
-            color: entryForeground(e, columnParent: columnParent),
-          ),
-        ),
-      ),
+      Expanded(child: entryName(e, columnParent: columnParent)),
       if (columns && compact && e.directory)
         Icon(
           CupertinoIcons.chevron_right,
@@ -3817,9 +5099,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           ),
         ),
       if (e.encrypted || !e.safe)
-        const Padding(
-          padding: EdgeInsets.only(right: 8),
-          child: Icon(CupertinoIcons.lock, size: 13, color: muted),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Icon(
+            CupertinoIcons.lock,
+            size: 13,
+            color: entryForeground(
+              e,
+              secondary: true,
+              columnParent: columnParent,
+            ),
+          ),
         ),
     ],
   );
@@ -3845,6 +5135,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         e,
         FileItemSurface(
           key: ValueKey('file-${e.path}'),
+          selectionPath: e.path,
           name: e.name,
           activeSelection: activeFileSelection(e, columnParent: columnParent),
           selectionHighlight: settings.selectionHighlight,
@@ -3857,22 +5148,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                   e.directory &&
                   (folder == e.normalized ||
                       folder.startsWith('${e.normalized}/'))),
-          onSelect: busy
+          onSelect: busy || inlineRenaming(e)
               ? null
               : () {
                   if (columnParent != null) navigate(columnParent);
                   selectFromPointer(e);
                   if (columns) revealColumns();
                 },
-          onDragPrepare:
-              widget.enableNativeTransfers && desktop.supportsQuickLook
-              ? (frame) => prepareMacDrag(e, frame)
-              : null,
           onDragStart:
-              !busy && widget.enableNativeTransfers && desktop.supportsQuickLook
+              !busy &&
+                  !inlineRenaming(e) &&
+                  widget.enableNativeTransfers &&
+                  desktop.supportsQuickLook
               ? () => startMacDrag(e)
               : null,
-          onActivate: busy ? null : () => openEntry(e),
+          onActivate: busy || inlineRenaming(e) ? null : () => openEntry(e),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
             child: Row(
@@ -3888,53 +5178,78 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                   )
                 else
                   SizedBox(
+                    key: ValueKey('list-cell-${e.path}-name'),
                     width: nameWidth,
-                    child: rowName(
-                      e,
-                      compact,
-                      columnParent: columnParent,
-                      iconSize: iconSize,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: rowName(
+                        e,
+                        compact,
+                        columnParent: columnParent,
+                        iconSize: iconSize,
+                      ),
                     ),
                   ),
                 if (!compact) ...[
                   SizedBox(
+                    key: ValueKey('list-cell-${e.path}-size'),
                     width: sizeWidth ?? 85,
-                    child: AppText(
-                      e.directory ? '—' : formatSize(e.size),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: entryForeground(
-                          e,
-                          secondary: true,
-                          columnParent: columnParent,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: AppText(
+                        e.directory ? '—' : formatSize(e.size),
+                        textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: entryForeground(
+                            e,
+                            secondary: true,
+                            columnParent: columnParent,
+                          ),
                         ),
                       ),
                     ),
                   ),
                   SizedBox(
+                    key: ValueKey('list-cell-${e.path}-modified'),
                     width: modifiedWidth ?? 115,
-                    child: AppText(
-                      date(e.modified),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: entryForeground(
-                          e,
-                          secondary: true,
-                          columnParent: columnParent,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: AppText(
+                        date(e.modified),
+                        textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: entryForeground(
+                            e,
+                            secondary: true,
+                            columnParent: columnParent,
+                          ),
                         ),
                       ),
                     ),
                   ),
                   SizedBox(
+                    key: ValueKey('list-cell-${e.path}-kind'),
                     width: kindWidth ?? 85,
-                    child: AppText(
-                      kind(e),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: entryForeground(
-                          e,
-                          secondary: true,
-                          columnParent: columnParent,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: AppText(
+                        kind(e),
+                        textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: entryForeground(
+                            e,
+                            secondary: true,
+                            columnParent: columnParent,
+                          ),
                         ),
                       ),
                     ),
@@ -3948,66 +5263,118 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
     columnParent: columnParent,
   );
-  Widget tile(ArchiveEntry e, {required double displaySize}) => contextMenu(
-    e,
-    transferable(
-      e,
-      FileItemSurface(
-        key: ValueKey('file-${e.path}'),
-        name: e.name,
-        selectionHighlight: settings.selectionHighlight,
-        selected: selectedPaths.contains(e.path),
-        onSelect: busy
-            ? null
-            : () {
-                selectFromPointer(e);
-              },
-        onDragPrepare: widget.enableNativeTransfers && desktop.supportsQuickLook
-            ? (frame) => prepareMacDrag(e, frame)
-            : null,
-        onDragStart:
-            !busy && widget.enableNativeTransfers && desktop.supportsQuickLook
-            ? () => startMacDrag(e)
-            : null,
-        onActivate: busy ? null : () => openEntry(e),
-        child: Padding(
-          padding: EdgeInsets.all(displaySize < 36 ? 4 : 8),
-          child: Column(
-            children: [
-              fileIcon(e, size: displaySize),
-              SizedBox(height: displaySize < 36 ? 4 : 8),
-              Text(
-                e.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: displaySize < 36 ? 10 : 11,
-                  height: 1.3,
-                  color: entryForeground(e),
+  Widget tile(ArchiveEntry e, {required double displaySize}) {
+    return FileItemHitArea(
+      key: ValueKey('grid-hit-area-${e.path}'),
+      builder: (iconRegion, nameRegion) {
+        final hitRegions = [iconRegion, nameRegion];
+        return contextMenu(
+          e,
+          transferable(
+            e,
+            FileItemSurface(
+              key: ValueKey('file-${e.path}'),
+              selectionPath: e.path,
+              name: e.name,
+              paintSelection: false,
+              hitRegions: hitRegions,
+              selectionHighlight: settings.selectionHighlight,
+              selected: selectedPaths.contains(e.path),
+              onSelect: busy || inlineRenaming(e)
+                  ? null
+                  : () {
+                      selectFromPointer(e);
+                    },
+              onDragStart:
+                  !busy &&
+                      !inlineRenaming(e) &&
+                      widget.enableNativeTransfers &&
+                      desktop.supportsQuickLook
+                  ? () => startMacDrag(e)
+                  : null,
+              onActivate: busy || inlineRenaming(e) ? null : () => openEntry(e),
+              child: Padding(
+                padding: EdgeInsets.all(displaySize < 36 ? 4 : 8),
+                child: Column(
+                  children: [
+                    DecoratedBox(
+                      key: ValueKey('grid-icon-background-${e.path}'),
+                      decoration: BoxDecoration(
+                        color: selectedPaths.contains(e.path)
+                            ? const Color(0x33808080)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Padding(
+                        key: iconRegion,
+                        padding: EdgeInsets.all(displaySize < 36 ? 4 : 8),
+                        child: fileIcon(e, size: displaySize),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: DecoratedBox(
+                          key: ValueKey('grid-name-background-${e.path}'),
+                          decoration: BoxDecoration(
+                            color: selectedPaths.contains(e.path)
+                                ? fileSelectionBackground(
+                                    context,
+                                    settings.selectionHighlight,
+                                  )
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Padding(
+                            key: nameRegion,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            child: entryName(
+                              e,
+                              maxLines: 2,
+                              textAlign: TextAlign.center,
+                              fontSize: displaySize < 36 ? 10 : 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              SizedBox(height: displaySize < 36 ? 1 : 3),
-              AppText(
-                e.directory ? '文件夹' : formatSize(e.size),
-                style: TextStyle(
-                  fontSize: displaySize < 36 ? 9 : 10,
-                  height: 1.3,
-                  color: entryForeground(e, secondary: true),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        );
+      },
+    );
+  }
+
+  double gridTextHeight(BuildContext context, String sample, double fontSize) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: sample,
+        style: DefaultTextStyle.of(context).style
+            .merge(TextStyle(fontSize: fontSize, height: 1.3)),
       ),
-    ),
-  );
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final height = painter.height.ceilToDouble();
+    painter.dispose();
+    return height;
+  }
 
   Widget galleryBrowser(DirectoryListing items) {
     final doc = document!;
     return GalleryBrowser(
       document: doc,
       enabled: !busy && !closing,
+      revealSelection: !marqueeSelecting,
+      selectionAreaBuilder: (controller, child) =>
+          fileSelectionArea(child, controller),
       entries: items,
       trailing: items.remainingCount > 0 ? remainingItems(folder, items) : null,
       selected: selected,
@@ -4021,23 +5388,26 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       },
       icon: (entry, size) => fileIcon(entry, size: size),
       foreground: (entry) => entryForeground(entry),
+      name: (entry) => entryName(entry, fontSize: 10),
       item: (entry, child) => contextMenu(
         entry,
         transferable(
           entry,
           FileItemSurface(
             key: ValueKey('file-${entry.path}'),
+            selectionPath: entry.path,
             name: entry.name,
             selected: selectedPaths.contains(entry.path),
             selectionHighlight: settings.selectionHighlight,
-            onSelect: busy ? null : () => selectFromPointer(entry),
-            onActivate: busy ? null : () => openEntry(entry),
-            onDragPrepare:
-                widget.enableNativeTransfers && desktop.supportsQuickLook
-                ? (frame) => prepareMacDrag(entry, frame)
-                : null,
+            onSelect: busy || inlineRenaming(entry)
+                ? null
+                : () => selectFromPointer(entry),
+            onActivate: busy || inlineRenaming(entry)
+                ? null
+                : () => openEntry(entry),
             onDragStart:
                 !busy &&
+                    !inlineRenaming(entry) &&
                     widget.enableNativeTransfers &&
                     desktop.supportsQuickLook
                 ? () => startMacDrag(entry)
@@ -4067,6 +5437,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       doc.writable,
       encoding: doc.encoding,
       resolvedEncoding: doc.resolvedEncoding,
+      password: doc.password,
+      nativePath: doc.nativePath,
+      comment: doc.comment,
     );
   }
 
@@ -4080,6 +5453,24 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Widget selectionActions({bool compact = false}) {
+    if (propertyWindowData != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final action in propertyWindowData!['actions'] as List)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: DesktopButton(
+                key: ValueKey('property-action-${action['id']}'),
+                onPressed: busy
+                    ? null
+                    : () => propertyAction(action['id'] as String),
+                child: AppText(action['label'] as String),
+              ),
+            ),
+        ],
+      );
+    }
     final entries = selection;
     final canOpen =
         !busy && entries.any((entry) => entry.directory || entry.canExtract);
@@ -4091,12 +5482,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             child: const AppText('打开'),
           );
     final overview = entries.isEmpty;
+    final archiveOverview = overview && folder.isEmpty;
     final extractButton = DesktopButton(
       key: const ValueKey('selection-extract'),
-      onPressed: busy ? null : () => extract(onlySelected: !overview),
-      child: AppText(overview ? '解压全部' : '解压'),
+      onPressed: busy
+          ? null
+          : () => extract(
+              onlySelected: !overview,
+              currentFolder: overview && !archiveOverview,
+            ),
+      child: AppText(archiveOverview ? '解压全部' : '解压'),
     );
-    final extractNamedButton = overview
+    final extractNamedButton = archiveOverview
         ? DesktopButton(
             key: const ValueKey('selection-extract-named'),
             onPressed: busy ? null : () => extract(namedFolder: true),
@@ -4131,27 +5528,37 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget selectionStrip() => Container(
     key: const ValueKey('selection-strip'),
-    height: 40,
+    height: _selectionStripHeight,
     padding: const EdgeInsets.symmetric(horizontal: 12),
     decoration: BoxDecoration(
       border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
     ),
-    child: Row(
-      children: [
-        Expanded(
-          child: selection.length > 1
-              ? AppText(
-                  '${selection.length} 个项目',
-                  overflow: TextOverflow.ellipsis,
-                )
-              : Text(
-                  selected?.name ?? p.basename(document!.path),
-                  overflow: TextOverflow.ellipsis,
-                ),
-        ),
-        const SizedBox(width: 8),
-        selectionActions(compact: true),
-      ],
+    child: LayoutBuilder(
+      builder: (context, bounds) => Row(
+        children: [
+          Expanded(
+            child: selection.length > 1
+                ? AppText(
+                    '${selection.length} 个项目',
+                    overflow: TextOverflow.ellipsis,
+                  )
+                : Text(
+                    selected?.name ?? p.basename(document!.path),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+          ),
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: bounds.maxWidth * .75),
+            child: SingleChildScrollView(
+              key: const ValueKey('selection-actions-scroll'),
+              scrollDirection: Axis.horizontal,
+              primary: false,
+              child: selectionActions(compact: true),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 
@@ -4239,131 +5646,155 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   String date(DateTime? d) => d == null
       ? '—'
       : '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
-  Widget inspectorLayout(
-    BoxConstraints constraints, {
+  Widget inspectorLayout({
     required Widget preview,
     required Widget information,
     required Widget actions,
+    bool? summaryLayout,
   }) => Column(
     children: [
       Expanded(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: (constraints.maxHeight - 32).clamp(0, double.infinity),
-            ),
-            child: Column(
-              mainAxisAlignment: gallery
-                  ? MainAxisAlignment.start
-                  : MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: gallery
-                  ? [information]
-                  : [
-                      preview,
-                      Padding(
-                        padding: const EdgeInsets.only(top: 24),
-                        child: information,
-                      ),
-                    ],
+        child: LayoutBuilder(
+          builder: (context, viewport) => SingleChildScrollView(
+            key: const ValueKey('inspector-scroll'),
+            padding: embeddedProperties
+                ? EdgeInsets.zero
+                : const EdgeInsets.all(16),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: (viewport.maxHeight - (embeddedProperties ? 0 : 32))
+                    .clamp(0, double.infinity),
+              ),
+              child: Column(
+                mainAxisAlignment: (summaryLayout ?? gallery)
+                    ? MainAxisAlignment.start
+                    : MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: (summaryLayout ?? gallery)
+                    ? [information]
+                    : [
+                        preview,
+                        Padding(
+                          padding: const EdgeInsets.only(top: 24),
+                          child: information,
+                        ),
+                      ],
+              ),
             ),
           ),
         ),
       ),
       DecoratedBox(
+        key: const ValueKey('inspector-actions'),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: Theme.of(context).dividerColor),
-          ),
+          color: propertyWindowData != null
+              ? context.theme.colors.card
+              : context.theme.colors.muted,
+          border: Border(top: BorderSide(color: context.theme.colors.border)),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          padding: embeddedProperties
+              ? const EdgeInsets.only(top: 16)
+              : const EdgeInsets.fromLTRB(16, 10, 16, 12),
           child: actions,
         ),
       ),
     ],
   );
 
-  Widget inspectorPanel() => Container(
-    key: const ValueKey('inspector-panel'),
-    decoration: BoxDecoration(
-      color: gallery
-          ? desktopColor(context, 0xfff5f5f7, 0xff2b2c2f)
-          : desktopColor(context, 0xffffffff, 0xff202124),
-    ),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        if (selection.length > 1) return selectionInspector(constraints);
-        if (selected == null || selected!.directory) {
-          return folderInspector(constraints, selected?.normalized ?? folder);
-        }
-        return inspectorLayout(
-          constraints,
-          preview: gallery
-              ? const SizedBox()
-              : Container(
-                  key: const ValueKey('inspector-preview'),
-                  height: (constraints.maxHeight * .5).clamp(120, 360),
-                  padding: const EdgeInsets.all(8),
-                  child: previewContent(),
-                ),
-          information: Column(
-            key: const ValueKey('inspector-information'),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (gallery)
-                galleryInspectorSummary(
-                  title: Text(
+  bool get embeddedProperties =>
+      propertyWindowData != null &&
+      context.findAncestorWidgetOfExactType<DesktopDialog>() != null;
+
+  Widget inspectorPanel({bool? summaryLayout, bool inProperties = false}) {
+    final summarized = summaryLayout ?? gallery;
+    return Container(
+      key: ValueKey(inProperties ? 'properties-panel' : 'inspector-panel'),
+      decoration: BoxDecoration(
+        color: inProperties
+            ? context.theme.colors.card
+            : context.theme.colors.muted,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (selection.length > 1) {
+            return selectionInspector(constraints, summaryLayout: summarized);
+          }
+          if (selected == null || selected!.directory) {
+            return folderInspector(
+              constraints,
+              selected?.normalized ?? folder,
+              summaryLayout: summarized,
+              inProperties: inProperties,
+            );
+          }
+          return inspectorLayout(
+            summaryLayout: summarized,
+            preview: summarized
+                ? const SizedBox()
+                : Container(
+                    key: const ValueKey('inspector-preview'),
+                    height: (constraints.maxHeight * .375).clamp(90, 270),
+                    padding: const EdgeInsets.all(8),
+                    child: previewContent(),
+                  ),
+            information: Column(
+              key: const ValueKey('inspector-information'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (summarized)
+                  galleryInspectorSummary(
+                    title: Text(
+                      selected!.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: kind(selected!),
+                    size: selected!.size,
+                    icon: fileIcon(selected!, size: 48),
+                  )
+                else ...[
+                  Text(
                     selected!.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  subtitle: kind(selected!),
-                  size: selected!.size,
-                  icon: fileIcon(selected!, size: 48),
-                )
-              else ...[
-                Text(
-                  selected!.name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(height: 4),
+                  AppText(
+                    kind(selected!),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: context.theme.colors.mutedForeground,
+                    ),
                   ),
+                ],
+                const SizedBox(height: 16),
+                const AppText(
+                  '信息',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 4),
-                AppText(
-                  kind(selected!),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: desktopColor(context, 0xff777780, 0xffa0a0a5),
-                  ),
+                const SizedBox(height: 8),
+                info(
+                  '大小',
+                  selected!.directory ? '—' : formatSize(selected!.size),
                 ),
+                info('修改日期', date(selected!.modified)),
+                info('路径', selected!.normalized, literal: true),
               ],
-              const SizedBox(height: 16),
-              const AppText(
-                '信息',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              info(
-                '大小',
-                selected!.directory ? '—' : formatSize(selected!.size),
-              ),
-              info('修改日期', date(selected!.modified)),
-              info('路径', selected!.normalized, literal: true),
-            ],
-          ),
-          actions: selectionActions(),
-        );
-      },
-    ),
-  );
+            ),
+            actions: selectionActions(),
+          );
+        },
+      ),
+    );
+  }
+
   Widget galleryInspectorSummary({
     required Widget title,
     required String subtitle,
@@ -4396,9 +5827,14 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
-  Widget selectionInspector(BoxConstraints constraints) {
+  Widget selectionInspector(BoxConstraints constraints, {bool? summaryLayout}) {
+    final summarized = summaryLayout ?? gallery;
     final entries = selection;
-    final folders = entries.where((entry) => entry.directory).length;
+    final count =
+        propertyWindowData?['selectionCount'] as int? ?? entries.length;
+    final folders =
+        propertyWindowData?['folderCount'] as int? ??
+        entries.where((entry) => entry.directory).length;
     final roots = entries.where(
       (entry) => !entries.any(
         (parent) =>
@@ -4407,19 +5843,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             entry.normalized.startsWith('${parent.normalized}/'),
       ),
     );
-    final size = roots.fold<int>(
-      0,
-      (sum, entry) =>
-          sum +
-          (entry.directory
-              ? document!.index.sizes[entry.normalized] ?? 0
-              : entry.size),
-    );
+    final size =
+        propertyWindowData?['size'] as int? ??
+        roots.fold<int>(
+          0,
+          (sum, entry) =>
+              sum +
+              (entry.directory
+                  ? document!.index.sizes[entry.normalized] ?? 0
+                  : entry.size),
+        );
     return inspectorLayout(
-      constraints,
+      summaryLayout: summarized,
       preview: SizedBox(
         key: const ValueKey('inspector-preview'),
-        height: (constraints.maxHeight * .5).clamp(120, 360),
+        height: (constraints.maxHeight * .375).clamp(90, 270),
         child: LayoutBuilder(
           builder: (_, bounds) => Stack(
             alignment: Alignment.center,
@@ -4440,16 +5878,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         key: const ValueKey('inspector-information'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (gallery)
+          if (summarized)
             galleryInspectorSummary(
               title: AppText(
-                '${entries.length} 个项目',
+                '$count 个项目',
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              subtitle: '${entries.length - folders} 个文件、$folders 个文件夹',
+              subtitle: '${count - folders} 个文件、$folders 个文件夹',
               size: size,
               icon: Stack(
                 alignment: Alignment.center,
@@ -4464,15 +5902,15 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             )
           else ...[
             AppText(
-              '${entries.length} 个项目',
+              '$count 个项目',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             AppText(
-              '${entries.length - folders} 个文件、$folders 个文件夹',
+              '${count - folders} 个文件、$folders 个文件夹',
               style: TextStyle(
                 fontSize: 12,
-                color: desktopColor(context, 0xff777780, 0xffa0a0a5),
+                color: context.theme.colors.mutedForeground,
               ),
             ),
           ],
@@ -4483,30 +5921,40 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           ),
           const SizedBox(height: 8),
           info('大小', formatSize(size)),
-          info('项目', '${entries.length} 个'),
+          info('项目', '$count 个'),
         ],
       ),
       actions: selectionActions(),
     );
   }
 
-  Widget folderInspector(BoxConstraints constraints, String summaryFolder) {
+  Widget folderInspector(
+    BoxConstraints constraints,
+    String summaryFolder, {
+    bool? summaryLayout,
+    bool inProperties = false,
+  }) {
+    final summarized = summaryLayout ?? gallery;
     final archive = summaryFolder.isEmpty;
     final title = archive
         ? p.basename(document!.path)
         : p.posix.basename(summaryFolder);
     final entries = itemsInFolder(summaryFolder);
-    final totalSize = archive
-        ? document!.index.totalSize
-        : document!.index.sizes[summaryFolder] ?? 0;
-    final itemCount = archive
-        ? document!.entries.length
-        : document!.index.descendants[summaryFolder] ?? 0;
+    final totalSize =
+        propertyWindowData?['size'] as int? ??
+        (archive
+            ? document!.index.totalSize
+            : document!.index.sizes[summaryFolder] ?? 0);
+    final itemCount =
+        propertyWindowData?['itemCount'] as int? ??
+        (archive
+            ? document!.entries.length
+            : document!.index.descendants[summaryFolder] ?? 0);
     return inspectorLayout(
-      constraints,
+      summaryLayout: summarized,
       preview: Container(
         key: const ValueKey('inspector-preview'),
-        height: (constraints.maxHeight * .5).clamp(120, 360),
+        height: (constraints.maxHeight * .375).clamp(90, 270),
         padding: const EdgeInsets.all(8),
         child: LayoutBuilder(
           builder: (context, previewConstraints) => Center(
@@ -4525,7 +5973,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         key: const ValueKey('inspector-information'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (gallery)
+          if (summarized)
             galleryInspectorSummary(
               title: Text(
                 title,
@@ -4559,7 +6007,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               archive ? document!.format : '文件夹',
               style: TextStyle(
                 fontSize: 11,
-                color: desktopColor(context, 0xff777780, 0xffa0a0a5),
+                color: context.theme.colors.mutedForeground,
               ),
             ),
           ],
@@ -4571,13 +6019,57 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           const SizedBox(height: 8),
           info('种类', archive ? document!.format : '文件夹'),
           info('项目', '$itemCount 个'),
-          info('当前层级', '${entries.length} 个'),
+          info(
+            '当前层级',
+            '${propertyWindowData?['currentCount'] ?? entries.length} 个',
+          ),
           info('大小', formatSize(totalSize)),
           info('路径', archive ? document!.path : summaryFolder, literal: true),
           if (archive) info('状态', document!.writable ? '可写入' : '只读'),
+          if (archive && document!.supportsComment)
+            archiveCommentInformation(inProperties: inProperties),
         ],
       ),
       actions: selectionActions(),
+    );
+  }
+
+  Widget archiveCommentInformation({bool inProperties = false}) {
+    final doc = document!;
+    return ArchiveCommentField(
+      key: ValueKey('archive-comment-${doc.path}'),
+      comment: doc.comment,
+      writable: doc.writable,
+      presentEditor: true,
+      fontSize: inProperties ? 12 : 11,
+      busy: busy,
+      draft: commentDrafts.putIfAbsent(doc.path, ArchiveCommentDraft.new),
+      onSave: (text, original) async {
+        try {
+          if (propertyWindowData != null) {
+            final updatedData = await widget.propertiesAction!('saveComment', {
+              'text': text,
+              'original': original,
+            });
+            if (mounted) setState(() => applyPropertiesData(updatedData));
+            return;
+          }
+          final updated = await service.writeComment(
+            doc,
+            text,
+            original: original,
+          );
+          if (!mounted) return;
+          setState(() {
+            tabFor(doc.path)?.document = updated;
+            if (document?.path == doc.path) document = updated;
+          });
+          message('注释已保存');
+        } catch (failure) {
+          if (mounted) message(failure.toString(), error: true);
+          rethrow;
+        }
+      },
     );
   }
 
@@ -4597,7 +6089,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             label,
             style: TextStyle(
               fontSize: 11,
-              color: desktopColor(context, 0xff777780, 0xffa0a0a5),
+              color: context.theme.colors.mutedForeground,
             ),
           ),
         ),
@@ -4622,7 +6114,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           padding: const EdgeInsets.all(12),
           child: AppText(
             previewError!,
-            style: const TextStyle(fontSize: 11, color: muted),
+            style: TextStyle(fontSize: 11, color: muted),
           ),
         ),
       );
@@ -4668,19 +6160,223 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget footer(bool desktopLayout) {
+  bool get hasConfirmation {
     final data = feedback.data;
-    final confirmation =
-        data != null &&
+    return data != null &&
         !data.running &&
         data.actions.keys.any((key) => key != 'dismiss');
+  }
+
+  // Keep interactive popovers inside the workspace bounds so they can receive
+  // pointer events without changing the footer or the file browser's layout.
+  Widget workspaceFeedback(bool desktopLayout) => SafeArea(
+    child: LayoutBuilder(
+      builder: (context, bounds) => Stack(
+        children: [
+          if (hasConfirmation && !feedback.nativeVisible && !desktopLayout)
+            Positioned.fill(
+              child: DesktopDialog(
+                key: const ValueKey('inline-task-actions'),
+                title: AppText(feedback.data!.title),
+                content: AppText(
+                  feedback.data!.detail,
+                  style: const TextStyle(fontSize: 13, height: 1.5),
+                ),
+                actions: [
+                  for (final action in feedback.data!.actions.entries)
+                    DesktopButton(
+                      primary: action.key == 'save' || action.key == 'create',
+                      onPressed: () => feedback.action(action.key),
+                      child: AppText(action.value),
+                    ),
+                ],
+              ),
+            )
+          else if (hasConfirmation && !feedback.nativeVisible)
+            Positioned(
+              left: 12,
+              right: 12,
+              top: !desktopLayout ? 12 : null,
+              bottom: !desktopLayout ? 12 : 38,
+              child: Align(
+                alignment: !desktopLayout
+                    ? Alignment.center
+                    : Alignment.bottomLeft,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: 560,
+                    maxHeight: (bounds.maxHeight - (!desktopLayout ? 24 : 50))
+                        .clamp(0.0, double.infinity),
+                  ),
+                  child: confirmationPanel(feedback.data!),
+                ),
+              ),
+            )
+          else if (queueExpanded)
+            Positioned(
+              right: 8,
+              bottom: 36,
+              width: (bounds.maxWidth - 16).clamp(0.0, 360.0),
+              child: taskQueuePanel(),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget confirmationPanel(TaskFeedback data) => FCard.raw(
+    key: const ValueKey('inline-task-actions'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppText(
+              data.title,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            if (entryNameInput != null) ...[
+              const SizedBox(height: 10),
+              DesktopTextField(
+                key: const ValueKey('inline-entry-name'),
+                controller: entryNameInput!,
+                autofocus: true,
+                onSubmitted: (_) => feedback.action('create'),
+              ),
+            ],
+            if (data.detail.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              AppText(
+                data.detail,
+                style: const TextStyle(fontSize: 12, height: 1.5),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final action in data.actions.entries)
+                  DesktopButton(
+                    primary: action.key == 'save' || action.key == 'create',
+                    onPressed: () => feedback.action(action.key),
+                    child: AppText(action.value),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget taskQueuePanel() {
+    final tasks = taskQueue.tasks;
+    return FCard.raw(
+      key: const ValueKey('archive-task-queue'),
+      child: tasks.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(12),
+              child: AppText('队列为空', style: TextStyle(fontSize: 12)),
+            )
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.all(8),
+                children: [
+                  for (final task in tasks)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            task.failed
+                                ? Icons.error_outline
+                                : task.paused
+                                ? Icons.pause
+                                : task.running
+                                ? Icons.play_arrow
+                                : Icons.schedule,
+                            size: 14,
+                            color: muted,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${p.basename(task.archive)} · ${appText(context, task.title)}${task.failed
+                                  ? ' · ${appText(context, '失败')}'
+                                  : task.paused
+                                  ? ' · ${appText(context, '已暂停')}'
+                                  : task.cancelled
+                                  ? ' · ${appText(context, '正在取消')}'
+                                  : ''}',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          if (!task.running &&
+                              !task.cancelled &&
+                              !task.failed) ...[
+                            const SizedBox(width: 8),
+                            AppText(
+                              '等待中',
+                              style: TextStyle(fontSize: 11, color: muted),
+                            ),
+                          ],
+                          if (task.failed)
+                            DesktopIconButton(
+                              tooltip: '重试',
+                              icon: const Icon(Icons.refresh, size: 16),
+                              onPressed: () => taskQueue.retry(task),
+                            ),
+                          if (task.canControl)
+                            DesktopIconButton(
+                              tooltip: task.paused ? '继续' : '暂停',
+                              icon: Icon(
+                                task.paused ? Icons.play_arrow : Icons.pause,
+                                size: 16,
+                              ),
+                              onPressed: () => task.paused
+                                  ? taskQueue.resume(task)
+                                  : taskQueue.pause(task),
+                            ),
+                          DesktopIconButton(
+                            key: ValueKey(
+                              'cancel-task-${task.archive}-${task.title}',
+                            ),
+                            tooltip: task.failed ? '关闭' : '取消任务',
+                            icon: const Icon(FIcons.x, size: 16),
+                            onPressed: task.failed
+                                ? () => taskQueue.dismiss(task)
+                                : task.canControl
+                                ? () => taskQueue.cancel(task)
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget footer(bool desktopLayout) {
+    final data = feedback.data;
+    final confirmation = hasConfirmation;
     final tasks = taskQueue.tasks;
     final running = tasks.where((task) => task.running).firstOrNull;
     final active = data?.running == true ? data : null;
     final overallProgress = active?.progress ?? progress;
     final showProgress =
-        overallProgress != null || active != null || running != null;
-    final text = active != null
+        (ModalRoute.isCurrentOf(context) ?? true) &&
+        auxiliaryModalDepth.value == 0 &&
+        !confirmation &&
+        (overallProgress != null || active != null || running != null);
+    final operationText = active != null
         ? '${appText(context, active.title)}${active.currentFile.isEmpty ? '' : ' · ${active.currentFile}'}${active.fileProgress == null ? '' : ' · ${appText(context, '当前文件')} ${(active.fileProgress!.clamp(0, 1) * 100).round()}%'}${overallProgress == null ? '' : ' · ${appText(context, '全部进度')} ${(overallProgress.clamp(0, 1) * 100).round()}%'}'
         : running != null
         ? '${appText(context, running.title)} · ${p.basename(running.archive)}'
@@ -4689,219 +6385,102 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               ? appText(context, data.title)
               : appText(context, data.detail))
         : appText(context, status);
+    final text = running?.paused == true
+        ? '${appText(context, '已暂停')} · $operationText'
+        : operationText;
     final needsAttention = confirmation || data?.error == true || statusError;
     final attentionKey = '$confirmation|${data?.error}|$statusError|$text';
     final attention =
         needsAttention &&
         active == null &&
         acknowledgedAttention != attentionKey;
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        if (confirmation)
-          Container(
-            key: const ValueKey('inline-task-actions'),
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AppText(
-                  data.title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (entryNameInput != null)
-                  TextField(
-                    key: const ValueKey('inline-entry-name'),
-                    controller: entryNameInput!,
-                    autofocus: true,
-                    style: const TextStyle(fontSize: 12),
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    onSubmitted: (_) => feedback.action('create'),
-                  ),
-                if (data.detail.isNotEmpty)
-                  AppText(data.detail, style: const TextStyle(fontSize: 11)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final action in data.actions.entries)
-                      DesktopButton(
-                        onPressed: () => feedback.action(action.key),
-                        child: AppText(action.value),
-                      ),
-                  ],
-                ),
-              ],
+    return BreathingStatusBar(
+      key: const ValueKey('workspace-status-bar'),
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      active: attention,
+      tint: confirmation
+          ? Theme.of(context).colorScheme.primary
+          : Theme.of(context).colorScheme.error,
+      onTap: () => acknowledgeStatus(attentionKey),
+      decoration: BoxDecoration(
+        color: context.theme.colors.muted,
+        border: Border(top: BorderSide(color: context.theme.colors.border)),
+      ),
+      child: Row(
+        children: [
+          if (!desktopLayout) ...[
+            DesktopIconButton(
+              key: const ValueKey('directory-drawer-toggle'),
+              tooltip: '目录',
+              icon: const Icon(FIcons.folderTree, size: 17),
+              onPressed: () {
+                final scaffold = contentScaffold.currentState;
+                if (scaffold?.isDrawerOpen == true) {
+                  scaffold?.closeDrawer();
+                } else {
+                  scaffold?.openDrawer();
+                }
+              },
             ),
-          ),
-        if (queueExpanded)
-          Positioned(
-            right: 8,
-            bottom: 36,
-            width: 360,
-            child: Card(
-              key: const ValueKey('archive-task-queue'),
-              margin: EdgeInsets.zero,
-              elevation: 8,
-              clipBehavior: Clip.antiAlias,
-              child: tasks.isEmpty
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: AppText('队列为空', style: TextStyle(fontSize: 12)),
-                    )
-                  : ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 260),
-                      child: ListView(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.all(8),
-                        children: [
-                          for (final task in tasks)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    task.running
-                                        ? Icons.play_arrow
-                                        : Icons.schedule,
-                                    size: 14,
-                                    color: muted,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      '${p.basename(task.archive)} · ${appText(context, task.title)}${task.cancelled ? ' · ${appText(context, '正在取消')}' : ''}',
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    key: ValueKey(
-                                      'cancel-task-${task.archive}-${task.title}',
-                                    ),
-                                    tooltip: appText(context, '取消任务'),
-                                    icon: const Icon(Icons.close, size: 16),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints.tightFor(
-                                      width: 28,
-                                      height: 28,
-                                    ),
-                                    onPressed: task.cancelled
-                                        ? null
-                                        : () => taskQueue.cancel(task),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-            ),
-          ),
-        BreathingStatusBar(
-          key: const ValueKey('workspace-status-bar'),
-          height: 30,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          active: attention,
-          tint: confirmation
-              ? Theme.of(context).colorScheme.primary
-              : const Color(0xffb44444),
-          onTap: () => acknowledgeStatus(attentionKey),
-          decoration: BoxDecoration(
-            color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
-            border: Border(
-              top: BorderSide(
-                color: desktopColor(context, 0xffdadada, 0xff414248),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Tooltip(
+              message: text,
+              child: Text(
+                text,
+                key: const ValueKey('archive-status'),
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: data?.error == true || statusError
+                      ? Theme.of(context).colorScheme.error
+                      : muted,
+                ),
               ),
             ),
           ),
-          child: Row(
-            children: [
-              if (!desktopLayout) ...[
-                DesktopIconButton(
-                  key: const ValueKey('directory-drawer-toggle'),
-                  tooltip: '目录',
-                  icon: const Icon(FIcons.folderTree, size: 17),
-                  onPressed: () {
-                    final scaffold = contentScaffold.currentState;
-                    if (scaffold?.isDrawerOpen == true) {
-                      scaffold?.closeDrawer();
-                    } else {
-                      scaffold?.openDrawer();
-                    }
+          if (showProgress) ...[
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 80,
+              child: overallProgress == null
+                  ? const FProgress()
+                  : FDeterminateProgress(value: overallProgress.clamp(0, 1)),
+            ),
+          ],
+          const SizedBox(width: 8),
+          DesktopButton(
+            key: const ValueKey('task-queue-toggle'),
+            flat: true,
+            minHeight: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            onPressed: () => setState(() => queueExpanded = !queueExpanded),
+            child: AppText(
+              '队列 (${tasks.length})',
+              style: const TextStyle(fontSize: 11),
+            ),
+          ),
+          if (document != null)
+            SizedBox(
+              width: desktopLayout ? 132 : 96,
+              child: AppTooltip(
+                message: '调整图标大小',
+                child: DesktopSlider(
+                  value: iconSize,
+                  showValueTooltip: false,
+                  min: BrowsingPreferences.minIconSize(browsingView),
+                  max: BrowsingPreferences.maxIconSize(browsingView),
+                  onChanged: (value) {
+                    setState(() => iconSize = value);
+                    saveBrowsingPreferences();
                   },
                 ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Tooltip(
-                  message: text,
-                  child: Text(
-                    text,
-                    key: const ValueKey('archive-status'),
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: data?.error == true || statusError
-                          ? const Color(0xffb44444)
-                          : muted,
-                    ),
-                  ),
-                ),
               ),
-              if (showProgress) ...[
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 80,
-                  child: LinearProgressIndicator(
-                    value: overallProgress?.clamp(0, 1),
-                    minHeight: 3,
-                  ),
-                ),
-              ],
-              const SizedBox(width: 8),
-              TextButton(
-                key: const ValueKey('task-queue-toggle'),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: const Size(0, 24),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: () => setState(() => queueExpanded = !queueExpanded),
-                child: AppText(
-                  '队列 (${tasks.length})',
-                  style: const TextStyle(fontSize: 11),
-                ),
-              ),
-              if (document != null)
-                SizedBox(
-                  width: 132,
-                  child: AppTooltip(
-                    message: '调整图标大小',
-                    child: DesktopSlider(
-                      value: iconSize,
-                      min: BrowsingPreferences.minIconSize(browsingView),
-                      max: BrowsingPreferences.maxIconSize(browsingView),
-                      onChanged: (value) {
-                        setState(() => iconSize = value);
-                        saveBrowsingPreferences();
-                      },
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
+            ),
+        ],
+      ),
     );
   }
 }

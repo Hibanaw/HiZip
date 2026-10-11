@@ -9,6 +9,7 @@ import '../models/archive_preferences.dart';
 import '../models/app_language.dart';
 import '../models/selection_highlight.dart';
 import '../models/theme_accent.dart';
+import '../models/auxiliary_window_mode.dart';
 
 class AppSettings extends ChangeNotifier {
   AppSettings({
@@ -28,6 +29,8 @@ class AppSettings extends ChangeNotifier {
     Future<void> Function(String)? writeArchive,
     Future<String?> Function()? readBrowsing,
     Future<void> Function(String)? writeBrowsing,
+    Future<String?> Function()? readWindowMode,
+    Future<void> Function(String)? writeWindowMode,
   }) : _readAccent =
            readAccent ??
            (() => SharedPreferencesAsync().getString('appearance.accent')),
@@ -90,6 +93,15 @@ class AppSettings extends ChangeNotifier {
              'browsing.preferences',
              value,
            )),
+       _readWindowMode =
+           readWindowMode ??
+           (() => SharedPreferencesAsync().getString('appearance.windowMode')),
+       _writeWindowMode =
+           writeWindowMode ??
+           ((value) => SharedPreferencesAsync().setString(
+             'appearance.windowMode',
+             value,
+           )),
        _write =
            write ?? ((value) => SharedPreferencesAsync().setInt(_key, value));
   final Future<String?> Function() _readArchive;
@@ -143,15 +155,40 @@ class AppSettings extends ChangeNotifier {
   }
 
   static final instance = AppSettings();
+  final Future<String?> Function() _readWindowMode;
+  final Future<void> Function(String) _writeWindowMode;
+  AuxiliaryWindowMode windowMode = AuxiliaryWindowMode.buildDefault;
+  bool get separateWindows => windowMode == AuxiliaryWindowMode.separate;
+
+  void synchronizeWindowMode(String value) {
+    final next = AuxiliaryWindowMode.fromName(value);
+    if (windowMode == next) return;
+    windowMode = next;
+    notifyListeners();
+  }
+
+  Future<void> setWindowMode(AuxiliaryWindowMode value) async {
+    if (saving || value == windowMode) return;
+    saving = true;
+    error = null;
+    notifyListeners();
+    try {
+      await _writeWindowMode(value.name);
+      windowMode = value;
+    } catch (_) {
+      error = '窗口显示设置保存失败，请重试。';
+    } finally {
+      saving = false;
+      notifyListeners();
+    }
+  }
+
   final Future<String?> Function() _readAccent;
   final Future<void> Function(String) _writeAccent;
-  ThemeAccent accent = ThemeAccent.blue;
+  ThemeAccent accent = ThemeAccent.orange;
 
   void synchronizeAccent(String value) {
-    final next = ThemeAccent.values.firstWhere(
-      (accent) => accent.name == value,
-      orElse: () => ThemeAccent.blue,
-    );
+    final next = ThemeAccent.fromName(value);
     if (accent == next) return;
     accent = next;
     notifyListeners();
@@ -233,11 +270,13 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> load() async {
     try {
+      windowMode = AuxiliaryWindowMode.fromName(await _readWindowMode());
+    } catch (_) {
+      // Preserve the current window mode when storage is unavailable.
+    }
+    try {
       final stored = await _readAccent();
-      accent = ThemeAccent.values.firstWhere(
-        (value) => value.name == stored,
-        orElse: () => ThemeAccent.blue,
-      );
+      accent = ThemeAccent.fromName(stored);
     } catch (_) {}
     try {
       final stored = await _readLanguage();

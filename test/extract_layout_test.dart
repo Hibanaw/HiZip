@@ -81,6 +81,21 @@ void main() {
   });
 
   test(
+    'a nested folder lands under its own name without parent folders',
+    () async {
+      final out = dest('out');
+      final path = await service.extract(
+        doc,
+        out.path,
+        roots: [entry('docs/sub')],
+      );
+      expect(path, p.join(out.path, 'sub'));
+      expect(names(out), ['sub']);
+      expect(File(p.join(path, 'a.txt')).readAsStringSync(), 'docs/sub/a.txt');
+    },
+  );
+
+  test(
     'several selections are placed side by side and never overwrite',
     () async {
       final out = dest('out');

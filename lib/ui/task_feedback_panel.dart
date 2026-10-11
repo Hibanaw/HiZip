@@ -18,25 +18,17 @@ class TaskFeedbackPanel extends StatelessWidget {
   final ValueChanged<String> onAction;
   final bool inWindow;
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => SizedBox(
     key: const ValueKey('task-feedback'),
     width: 440,
     height: 216,
+    child: inWindow
+        ? panelContent(context)
+        : FCard.raw(child: panelContent(context)),
+  );
+
+  Widget panelContent(BuildContext context) => Padding(
     padding: const EdgeInsets.all(16),
-    decoration: inWindow
-        ? null
-        : BoxDecoration(
-            color: context.theme.colors.background,
-            border: Border.all(color: context.theme.colors.border),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x18000000),
-                blurRadius: 24,
-                offset: Offset(0, 8),
-              ),
-            ],
-          ),
     child: Center(
       child: SingleChildScrollView(
         child: Column(
@@ -59,7 +51,7 @@ class TaskFeedbackPanel extends StatelessWidget {
                     data.error ? FIcons.circleAlert : FIcons.circleCheck,
                     size: 20,
                     color: data.error
-                        ? const Color(0xffb44444)
+                        ? Theme.of(context).colorScheme.error
                         : context.theme.colors.foreground,
                   ),
                 const SizedBox(width: 12),

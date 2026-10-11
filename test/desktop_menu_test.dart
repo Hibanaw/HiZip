@@ -5,8 +5,124 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/services/desktop_integration.dart';
 import 'package:hizip/ui/file_context_menu.dart';
 import 'package:hizip/ui/desktop_widgets.dart';
+import 'package:forui/forui.dart';
 
 void main() {
+  testWidgets('pointer menus stay inside the window at every edge', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: foruiBuilder,
+        theme: desktopTheme(),
+        home: Scaffold(
+          body: FileContextMenu(
+            onOpen: () {},
+            onCopy: () {},
+            onDelete: () {},
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+    for (final position in [
+      const Offset(398, 298),
+      const Offset(2, 2),
+      const Offset(398, 2),
+      const Offset(2, 298),
+      const Offset(200, 150),
+    ]) {
+      await tester.tapAt(position, buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      final group = find
+          .ancestor(of: find.text('打开'), matching: find.byType(FItemGroup))
+          .last;
+      final bounds = tester.getRect(group);
+      expect(bounds.left, greaterThanOrEqualTo(8));
+      expect(bounds.top, greaterThanOrEqualTo(8));
+      expect(bounds.right, lessThanOrEqualTo(392));
+      expect(bounds.bottom, lessThanOrEqualTo(292));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+    }
+    await tester.tapAt(const Offset(2, 2), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(398, 298));
+    await tester.pumpAndSettle();
+    expect(find.text('打开'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final submenu in [false, true]) {
+    testWidgets('long ${submenu ? 'submenus' : 'menus'} fit and scroll', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(180, 220);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var selected = -1;
+      final actions = [
+        for (var i = 0; i < 24; i++)
+          DesktopMenuAction('Action $i', () => selected = i),
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: foruiBuilder,
+          theme: desktopTheme(),
+          home: Scaffold(
+            body: FileContextMenu(
+              actions: submenu
+                  ? [DesktopMenuAction('Tools', null, children: actions)]
+                  : actions,
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+      await tester.tapAt(
+        const Offset(178, 218),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      if (submenu) {
+        await tester.tap(find.text('Tools'));
+        await tester.pumpAndSettle();
+      }
+      final group = find
+          .ancestor(
+            of: find.text('Action 0'),
+            matching: find.byType(FItemGroup),
+          )
+          .evaluate()
+          .firstWhere(
+            (element) => (element.widget as FItemGroup).maxHeight.isFinite,
+          );
+      final bounds = tester.getRect(find.byWidget(group.widget));
+      expect(bounds.left, greaterThanOrEqualTo(8));
+      expect(bounds.top, greaterThanOrEqualTo(8));
+      expect(bounds.right, lessThanOrEqualTo(172));
+      expect(bounds.bottom, lessThanOrEqualTo(212));
+      await tester.scrollUntilVisible(
+        find.text('Action 23'),
+        100,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Action 23'));
+      await tester.pumpAndSettle();
+      expect(selected, 23);
+      expect(find.text('Action 23'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
   testWidgets('archive open-with menu prioritizes HiZip', (tester) async {
     var openedInHiZip = false;
     FileApplication? openedApplication;
