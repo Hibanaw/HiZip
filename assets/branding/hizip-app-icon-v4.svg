@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-labelledby="title description">
+  <title id="title">HiZip — orange archive and fox tail</title>
+  <desc id="description">Editable vector redrawing of the approved v3 icon. Named layers contain the tile, fox tail, paper, fold and zipper. The pull-tab holes are actual vector cutouts. The area outside the tile is transparent.</desc>
+  <defs>
+    <linearGradient id="orange" x1="265" y1="36" x2="890" y2="1210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffa400"/>
+      <stop offset=".48" stop-color="#ff7800"/>
+      <stop offset="1" stop-color="#ff5009"/>
+    </linearGradient>
+    <linearGradient id="tail-orange" x1="935" y1="430" x2="956" y2="906" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e84500"/>
+      <stop offset="1" stop-color="#c72f00"/>
+    </linearGradient>
+    <linearGradient id="ivory" x1="957" y1="227" x2="1063" y2="550" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffdf4"/>
+      <stop offset="1" stop-color="#fff3d9"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="366" y1="220" x2="747" y2="1036" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#fafafa"/>
+    </linearGradient>
+    <linearGradient id="fold-cream" x1="655" y1="220" x2="822" y2="462" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff0db"/>
+      <stop offset="1" stop-color="#ffe7c9"/>
+    </linearGradient>
+    <linearGradient id="zip-orange" x1="509" y1="219" x2="509" y2="977" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff5b00"/>
+      <stop offset=".38" stop-color="#ef4800"/>
+      <stop offset="1" stop-color="#e43b00"/>
+    </linearGradient>
+    <filter id="paper-shadow" x="-20%" y="-15%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dy="17" result="shadow-offset"/>
+      <feFlood flood-color="#b92d00" flood-opacity=".16"/>
+      <feComposite in2="shadow-offset" operator="in"/>
+    </filter>
+    <path id="paper-outline" d="M 341,219
+      H 648 C 658,219 665,224 673,232
+      L 861,434 Q 874,447 874,464
+      V 895 C 874,985 836,1036 749,1036
+      H 334 C 246,1036 202,992 202,902
+      V 362 C 202,283 266,219 341,219 Z"/>
+  </defs>
+
+  <g id="background" inkscape:groupmode="layer" inkscape:label="01 · Orange tile">
+    <!-- Continuous corner curves rather than a circular-corner rectangle. -->
+    <path id="tile" fill="url(#orange)" d="M 366,19 H 888
+      C 1019,19 1087,23 1149,69
+      C 1215,119 1235,182 1235,323
+      V 931 C 1235,1072 1215,1135 1149,1185
+      C 1087,1231 1019,1235 888,1235
+      H 366 C 235,1235 167,1231 105,1185
+      C 39,1135 19,1072 19,931
+      V 323 C 19,182 39,119 105,69
+      C 167,23 235,19 366,19 Z"/>
+  </g>
+
+  <g id="fox-tail" inkscape:groupmode="layer" inkscape:label="02 · Fox tail — behind paper">
+    <path id="tail-body" fill="url(#tail-orange)" d="M 826,850
+      C 941,770 1030,670 1056,570
+      C 1068,524 1068,486 1059,457
+      L 1091,534
+      C 1104,621 1065,728 1002,798
+      C 964,840 920,875 868,903
+      L 817,920 Z"/>
+    <path id="tail-tip" fill="url(#ivory)" d="M 929,228
+      C 992,248 1041,305 1069,373
+      C 1091,427 1101,489 1091,547
+      C 1084,508 1072,478 1059,457
+      C 1052,489 1032,525 997,548
+      C 1007,503 995,454 980,415
+      C 970,432 954,448 937,458
+      C 942,434 944,409 945,387
+      C 917,397 889,414 863,434
+      C 873,405 891,379 909,353
+      C 935,314 944,272 929,228 Z"/>
+  </g>
+
+  <g id="document" inkscape:groupmode="layer" inkscape:label="03 · Archive paper">
+    <use id="document-shadow" href="#paper-outline" fill="#b92d00" filter="url(#paper-shadow)"/>
+    <use id="document-sheet" href="#paper-outline" fill="url(#paper)"/>
+  </g>
+
+  <g id="fold" inkscape:groupmode="layer" inkscape:label="04 · Folded corner">
+    <path id="corner" fill="url(#fold-cream)" d="M 655,220
+      C 662,222 668,227 673,232
+      L 861,434 Q 874,447 874,461
+      H 718 C 677,461 655,440 655,398 Z"/>
+  </g>
+
+  <g id="zipper" inkscape:groupmode="layer" inkscape:label="05 · Zipper and pull tab" fill="url(#zip-orange)">
+    <!-- The narrow spine joins broad rounded teeth; all are individually editable. -->
+    <path id="zipper-spine" d="M 491,270 H 527 Q 533,270 533,276
+      V 742 H 484 V 276 Q 484,270 491,270 Z"/>
+    <path id="zipper-top" d="M 448,219 H 570 V 284
+      Q 570,296 559,296 H 540 Q 533,296 533,303
+      H 484 Q 484,296 477,296 H 459
+      Q 448,296 448,284 Z"/>
+    <path id="tooth-1" d="M 484,323 Q 484,331 476,331 H 459 Q 448,331 448,342
+      V 363 Q 448,374 459,374 H 476 Q 484,374 484,382
+      H 533 Q 533,374 541,374 H 559 Q 570,374 570,363
+      V 342 Q 570,331 559,331 H 541 Q 533,331 533,323 Z"/>
+    <path id="tooth-2" d="M 484,401 Q 484,409 476,409 H 459 Q 448,409 448,420
+      V 441 Q 448,452 459,452 H 476 Q 484,452 484,460
+      H 533 Q 533,452 541,452 H 559 Q 570,452 570,441
+      V 420 Q 570,409 559,409 H 541 Q 533,409 533,401 Z"/>
+    <path id="tooth-3" d="M 484,478 Q 484,486 476,486 H 459 Q 448,486 448,497
+      V 519 Q 448,530 459,530 H 476 Q 484,530 484,538
+      H 533 Q 533,530 541,530 H 559 Q 570,530 570,519
+      V 497 Q 570,486 559,486 H 541 Q 533,486 533,478 Z"/>
+    <path id="tooth-4" d="M 484,556 Q 484,564 476,564 H 459 Q 448,564 448,575
+      V 597 Q 448,608 459,608 H 476 Q 484,608 484,616
+      H 533 Q 533,608 541,608 H 559 Q 570,608 570,597
+      V 575 Q 570,564 559,564 H 541 Q 533,564 533,556 Z"/>
+    <path id="tooth-5" d="M 484,634 Q 484,642 476,642 H 459 Q 448,642 448,653
+      V 675 Q 448,686 459,686 H 476 Q 484,686 484,694
+      H 533 Q 533,686 541,686 H 559 Q 570,686 570,675
+      V 653 Q 570,642 559,642 H 541 Q 533,642 533,634 Z"/>
+    <!-- Both apertures are subpaths of the pull, not white shapes painted over it. -->
+    <path id="pull-tab" fill-rule="evenodd" d="M 474,714 H 544
+      C 561,714 576,727 580,746
+      L 596,878 C 608,938 570,977 509,977
+      C 448,977 410,938 422,878
+      L 438,746 C 442,727 457,714 474,714 Z
+      M 493,742 H 525 C 537,742 544,749 547,761
+      L 551,798 C 553,816 544,826 529,826
+      H 489 C 474,826 465,816 467,798
+      L 471,761 C 474,749 481,742 493,742 Z
+      M 546,902 A 37,37 0 1 0 472,902 A 37,37 0 1 0 546,902 Z"/>
+  </g>
+</svg>

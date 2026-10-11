@@ -8,15 +8,22 @@ class ArchiveEntry {
     this.regular = true,
     this.safe = true,
     this.encrypted = false,
+    this.unlocked = false,
+    this.linkTarget,
     this.modified,
   });
-  factory ArchiveEntry.fromJson(Map<String, dynamic> j) => ArchiveEntry(
+  factory ArchiveEntry.fromJson(
+    Map<String, dynamic> j, {
+    bool unlocked = false,
+  }) => ArchiveEntry(
     path: j['path'] as String,
     size: (j['size'] as num).toInt(),
     directory: j['directory'] as bool,
     regular: j['regular'] as bool,
     safe: j['safe'] as bool,
     encrypted: j['encrypted'] as bool,
+    unlocked: unlocked,
+    linkTarget: j['link'] as String?,
     modified: (j['modified'] as num) > 0
         ? DateTime.fromMillisecondsSinceEpoch(
             (j['modified'] as num).toInt() * 1000,
@@ -25,8 +32,12 @@ class ArchiveEntry {
   );
   final String path;
   final int size;
-  final bool directory, regular, safe, encrypted;
+  final bool directory, regular, safe, encrypted, unlocked;
+  final String? linkTarget;
   final DateTime? modified;
+  bool get isSymlink => linkTarget != null && !directory;
+  bool get hasUnsafeLink =>
+      isSymlink && isUnsafeLinkTarget(normalized, linkTarget!);
   String get normalized => path.replaceAll(RegExp(r'/+$'), '');
   String get name => p.posix.basename(normalized);
   String get extension => p.posix.extension(name).toLowerCase();
@@ -57,7 +68,8 @@ class ArchiveEntry {
         '.svg',
       ].contains(extension) ||
       name.toLowerCase() == 'readme';
-  bool get canExtract => safe && regular && !directory && !encrypted;
+  bool get canExtract =>
+      safe && regular && !directory && (!encrypted || unlocked);
 }
 
 List<ArchiveEntry> childrenOf(
@@ -145,4 +157,35 @@ ArchiveFolder buildFolderTree(List<ArchiveEntry> entries) {
     );
   }
   return root;
+}
+
+/// What to do with symbolic links whose target is absolute or leaves the
+/// extraction folder.
+enum LinkPolicy { keepAll, skipUnsafe }
+
+/// What to do when two entries differ only by letter case and the destination
+/// disk does not tell them apart.
+enum CaseConflictPolicy { rename, skip }
+
+/// Whether a link at [entryPath] (archive-relative) points outside the folder
+/// it is extracted into: an absolute path, or `..` climbing above the root.
+bool isUnsafeLinkTarget(String entryPath, String target) {
+  final value = target.replaceAll('\\', '/');
+  if (value.isEmpty ||
+      value.startsWith('/') ||
+      RegExp(r'^[A-Za-z]:').hasMatch(value)) {
+    return true;
+  }
+  final stack = p.posix.dirname(entryPath).split('/')
+    ..removeWhere((part) => part.isEmpty || part == '.');
+  for (final part in value.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part == '..') {
+      if (stack.isEmpty) return true;
+      stack.removeLast();
+    } else {
+      stack.add(part);
+    }
+  }
+  return false;
 }

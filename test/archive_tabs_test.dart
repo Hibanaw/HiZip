@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/models/archive_entry.dart';
+import 'package:hizip/models/finder_compression_request.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/desktop_integration.dart';
@@ -55,6 +56,7 @@ class TabsDesktop extends DesktopIntegration {
     Future<void> Function()? prepareClose,
     void Function(String)? command,
     void Function(String)? openArchive,
+    Future<void> Function(FinderCompressionRequest)? compressFiles,
     VoidCallback? clearRecent,
     VoidCallback? dragEnded,
     VoidCallback? dragStarted,

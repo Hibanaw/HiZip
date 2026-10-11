@@ -4,15 +4,31 @@ import 'package:flutter/foundation.dart';
 
 import '../models/task_feedback.dart';
 import '../services/task_windows.dart';
+import '../services/app_settings.dart';
 
 class TaskFeedbackController extends ChangeNotifier {
   TaskFeedbackController({
     this.useNativeWindows = true,
     this.progressDelay = const Duration(milliseconds: 500),
-  });
+    this.allowNativeWindow,
+    AppSettings? settings,
+  }) : settings = settings ?? AppSettings.instance,
+       transport = TaskWindowTransport(settings: settings) {
+    this.settings.addListener(windowModeChanged);
+    separateWindows = this.settings.separateWindows;
+  }
+  final AppSettings settings;
+  final bool Function()? allowNativeWindow;
+  late bool separateWindows;
+  void windowModeChanged() {
+    if (disposed || separateWindows == settings.separateWindows) return;
+    separateWindows = settings.separateWindows;
+    if (data != null) present(data!);
+  }
+
   final bool useNativeWindows;
   final Duration progressDelay;
-  final transport = TaskWindowTransport();
+  final TaskWindowTransport transport;
   TaskFeedback? data;
   bool nativeVisible = false, finished = false, disposed = false;
   Timer? delay;
@@ -27,6 +43,7 @@ class TaskFeedbackController extends ChangeNotifier {
     String detail = '',
     bool showProgress = true,
     bool reportFastSuccess = true,
+    Duration? progressDelay,
     bool Function()? current,
   }) {
     action('dismiss');
@@ -43,7 +60,7 @@ class TaskFeedbackController extends ChangeNotifier {
     );
     delay?.cancel();
     if (!showProgress) return token;
-    delay = Timer(progressDelay, () {
+    delay = Timer(progressDelay ?? this.progressDelay, () {
       if (!finished && !disposed && token == generation) {
         if (current?.call() == false) {
           action('dismiss');
@@ -83,9 +100,13 @@ class TaskFeedbackController extends ChangeNotifier {
 
   void result(String text, {bool error = false, int? token}) {
     if (disposed || (token != null && token != generation)) return;
+    final active = pending != null && !finished;
     delay?.cancel();
     finished = true;
-    if (!error && token != null && !reportFastSuccess && !progressPresented) {
+    if (!error &&
+        (token != null || active) &&
+        !reportFastSuccess &&
+        !progressPresented) {
       return;
     }
     present(
@@ -111,7 +132,14 @@ class TaskFeedbackController extends ChangeNotifier {
   void present(TaskFeedback next) {
     if (disposed) return;
     data = next;
-    nativeVisible = useNativeWindows && transport.supported;
+    final wasNative = nativeVisible;
+    nativeVisible =
+        !next.running &&
+        next.actions.keys.any((action) => action != 'dismiss') &&
+        useNativeWindows &&
+        transport.supported &&
+        (allowNativeWindow?.call() ?? true);
+    if (wasNative && !nativeVisible) unawaited(transport.hide());
     notifyListeners();
     if (nativeVisible) {
       dirty = true;
@@ -123,10 +151,10 @@ class TaskFeedbackController extends ChangeNotifier {
     if (sending) return;
     sending = true;
     try {
-      while (dirty && !disposed && data != null) {
+      while (dirty && !disposed && data != null && nativeVisible) {
         dirty = false;
         final shown = await transport.show(data!, action);
-        if (disposed || data == null) {
+        if (disposed || data == null || !nativeVisible) {
           await transport.hide();
           break;
         }
@@ -153,6 +181,8 @@ class TaskFeedbackController extends ChangeNotifier {
       reply!.complete(value == 'dismiss' ? null : value);
     }
     reply = null;
+    pending = null;
+    finished = true;
     data = null;
     nativeVisible = false;
     unawaited(transport.hide());
@@ -162,6 +192,7 @@ class TaskFeedbackController extends ChangeNotifier {
   @override
   void dispose() {
     disposed = true;
+    settings.removeListener(windowModeChanged);
     delay?.cancel();
     if (reply?.isCompleted == false) reply!.complete(null);
     transport.dispose();

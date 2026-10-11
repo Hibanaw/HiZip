@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "hizip_native.h"
+#include "hizip_rar.h"
 #include "vendor/archive.h"
 #include "vendor/archive_entry.h"
 #include <stdio.h>
@@ -10,6 +11,14 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <locale.h>
+#include <errno.h>
+#include <fcntl.h>
+#ifdef __APPLE__
+#include <sys/stdio.h>
+#endif
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 typedef struct _stat64 hz_stat_t;
@@ -42,6 +51,14 @@ typedef struct stat hz_stat_t;
 static int read_open(struct archive *a, const char *s) { return archive_read_open_filename(a, s, 65536); }
 static int write_open(struct archive *a, const char *s) { return archive_write_open_filename(a, s); }
 #endif
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#elif defined(__linux__) || defined(__ANDROID__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 typedef struct { char *s; size_t n, cap; } buffer;
 static void append(buffer *b, const char *fmt, ...) {
@@ -70,14 +87,114 @@ static char *ok(void) { buffer b = {0}; append(&b, "{\"ok\":true}"); return b.s;
 #else
 #define HZ_THREAD_LOCAL _Thread_local
 #endif
+// Shared between the UI and workers. Lifetime belongs to the drained task scope.
+#ifdef _WIN32
+typedef struct { volatile LONG state; } hz_control;
+static int control_state(hz_control *c) { return (int)InterlockedCompareExchange(&c->state, 0, 0); }
+#else
+#include <stdatomic.h>
+#include <time.h>
+typedef struct { _Atomic int state; } hz_control;
+static int control_state(hz_control *c) { return atomic_load_explicit(&c->state, memory_order_acquire); }
+#endif
+static HZ_THREAD_LOCAL hz_control *active_control = NULL;
+HZ_EXPORT void *hz_control_create(void) {
+  hz_control *control = calloc(1, sizeof(hz_control));
+#ifndef _WIN32
+  if (control) atomic_init(&control->state, 0);
+#endif
+  return control;
+}
+HZ_EXPORT void hz_control_free(void *control) { free(control); }
+HZ_EXPORT void hz_control_bind(void *control) { active_control = control; }
+HZ_EXPORT int hz_control_get(void *control) { return control ? control_state(control) : 0; }
+HZ_EXPORT void hz_control_set(void *control, int state) {
+  hz_control *c = control;
+  if (!c || state < 0 || state > 3) return;
+#ifdef _WIN32
+  LONG previous;
+  do { previous = InterlockedCompareExchange(&c->state, 0, 0); if (previous >= 2) return; }
+  while (InterlockedCompareExchange(&c->state, state, previous) != previous);
+#else
+  int previous = atomic_load(&c->state);
+  do { if (previous >= 2) return; } while (!atomic_compare_exchange_weak(&c->state, &previous, state));
+#endif
+}
+static int checkpoint(struct archive *a) {
+  while (active_control && control_state(active_control) == 1) {
+#ifdef _WIN32
+    Sleep(20);
+#else
+    struct timespec delay = {0, 20000000}; nanosleep(&delay, NULL);
+#endif
+  }
+  if (active_control && control_state(active_control) == 2) {
+    if (a) archive_set_error(a, ECANCELED, "Operation cancelled");
+    return 0;
+  }
+  return 1;
+}
+static int rar_checkpoint(void) { return checkpoint(NULL); }
+HZ_EXPORT int hz_control_checkpoint(void *control) {
+  hz_control *previous = active_control; active_control = control;
+  int success = checkpoint(NULL); active_control = previous; return success;
+}
+static la_ssize_t controlled_read(struct archive *a, void *buffer, size_t size) {
+  return checkpoint(a) ? archive_read_data(a, buffer, size) : -1;
+}
+static la_ssize_t controlled_write(struct archive *a, const void *buffer, size_t size) {
+  return checkpoint(a) ? archive_write_data(a, buffer, size) : -1;
+}
+
 // Scoped by the synchronous FFI caller; concurrent workers never share options.
 static HZ_THREAD_LOCAL char read_charset[64] = "";
 static HZ_THREAD_LOCAL char write_charset[64] = "UTF-8";
 static HZ_THREAD_LOCAL int compression_level = 6;
+static HZ_THREAD_LOCAL char read_password[4097] = "";
+static HZ_THREAD_LOCAL char write_encryption[16] = "none";
+static HZ_THREAD_LOCAL char zip_compression[16] = "deflate";
+HZ_EXPORT void hz_configure_security(const char *password, const char *encryption, const char *compression) {
+  volatile unsigned char *secret = (volatile unsigned char *)read_password;
+  for (size_t i = 0; i < sizeof(read_password); i++) secret[i] = 0;
+  snprintf(read_password, sizeof(read_password), "%s", password ? password : "");
+  snprintf(write_encryption, sizeof(write_encryption), "%s", encryption ? encryption : "none");
+  snprintf(zip_compression, sizeof(zip_compression), "%s", compression ? compression : "deflate");
+}
+static int configure_writer(struct archive *, int, int, const char *);
+static int format_for_filename(const char *, int *);
+HZ_EXPORT char *hz_capabilities(void) {
+  struct archive *w = archive_write_new();
+  archive_write_set_format_zip(w);
+  int aes = archive_write_set_format_option(w, "zip", "encryption", "aes256") == ARCHIVE_OK;
+  archive_write_free(w);
+  buffer b = {0}; append(&b, "{\"zipAES256\":%s,\"zipCompression\":[\"deflate\",\"store\"],\"encryptedUpdates\":false,\"headerEncryption\":false,\"writableFormats\":[", aes ? "true" : "false");
+  const char *formats[] = {"zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.lzma", "tar.zst", "tar.lz4", "tar.lzip", "tar.Z", "cpio", "ar", "gz", "bz2", "xz", "lzma", "zst", "lz4", "lzip", "Z"};
+  int first = 1;
+  for (size_t i = 0; i < sizeof(formats)/sizeof(formats[0]); i++) {
+    char filename[32]; snprintf(filename, sizeof(filename), "archive.%s", formats[i]);
+    int filter, format = format_for_filename(filename, &filter); w = archive_write_new();
+    if (configure_writer(w, format, filter, "UTF-8") == ARCHIVE_OK) {
+      if (!first) append(&b, ","); first = 0; quote(&b, formats[i]);
+    }
+    archive_write_free(w);
+  }
+  append(&b, "],\"rarRead\":true,\"rarEncryption\":true,\"rarVolumes\":true}");
+  return b.s;
+}
 HZ_EXPORT void hz_configure_encoding(const char *read, const char *write, int level) {
   snprintf(read_charset, sizeof(read_charset), "%s", read ? read : "");
   snprintf(write_charset, sizeof(write_charset), "%s", write ? write : "UTF-8");
   compression_level = level >= 0 && level <= 9 ? level : 6;
+}
+HZ_EXPORT void hz_prepare_worker(void) {
+#ifdef _WIN32
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#elif defined(__linux__) || defined(__ANDROID__)
+  const pid_t thread_id = (pid_t)syscall(SYS_gettid);
+  setpriority(PRIO_PROCESS, thread_id, 5);
+#endif
 }
 static int suffix(const char *path, const char *ending) {
   size_t a = strlen(path), b = strlen(ending);
@@ -92,9 +209,14 @@ static int suffix(const char *path, const char *ending) {
 static int writable_format(int format, int filter) {
   int base = format & ARCHIVE_FORMAT_BASE_MASK;
   return (base == ARCHIVE_FORMAT_ZIP || base == ARCHIVE_FORMAT_7ZIP ||
-    base == ARCHIVE_FORMAT_TAR || base == ARCHIVE_FORMAT_CPIO || base == ARCHIVE_FORMAT_RAW) &&
+    base == ARCHIVE_FORMAT_TAR || base == ARCHIVE_FORMAT_CPIO ||
+    base == ARCHIVE_FORMAT_AR ||
+    base == ARCHIVE_FORMAT_RAW) &&
     (filter == ARCHIVE_FILTER_NONE || filter == ARCHIVE_FILTER_GZIP ||
-      filter == ARCHIVE_FILTER_BZIP2 || filter == ARCHIVE_FILTER_XZ || filter == ARCHIVE_FILTER_LZMA);
+      filter == ARCHIVE_FILTER_BZIP2 || filter == ARCHIVE_FILTER_XZ ||
+      filter == ARCHIVE_FILTER_LZMA || filter == ARCHIVE_FILTER_COMPRESS ||
+      filter == ARCHIVE_FILTER_LZIP || filter == ARCHIVE_FILTER_LZ4 ||
+      filter == ARCHIVE_FILTER_ZSTD);
 }
 static int configure_writer(struct archive *w, int format, int filter, const char *charset) {
   int rc;
@@ -103,6 +225,8 @@ static int configure_writer(struct archive *w, int format, int filter, const cha
     case ARCHIVE_FORMAT_7ZIP: rc = archive_write_set_format_7zip(w); break;
     case ARCHIVE_FORMAT_TAR: rc = archive_write_set_format_pax_restricted(w); break;
     case ARCHIVE_FORMAT_CPIO: rc = archive_write_set_format_cpio_newc(w); break;
+    case ARCHIVE_FORMAT_AR: rc = archive_write_set_format_ar_svr4(w); break;
+    case ARCHIVE_FORMAT_XAR: rc = archive_write_set_format_xar(w); break;
     case ARCHIVE_FORMAT_RAW: rc = archive_write_set_format_raw(w); break;
     default: return ARCHIVE_FATAL;
   }
@@ -117,12 +241,29 @@ static int configure_writer(struct archive *w, int format, int filter, const cha
     rc = archive_write_set_format_option(w, NULL, "compression-level", level);
     if (rc != ARCHIVE_OK) return rc;
   }
+  if (strcmp(write_encryption, "none")) {
+    if ((format & ARCHIVE_FORMAT_BASE_MASK) != ARCHIVE_FORMAT_ZIP || strcmp(write_encryption, "aes256") || !*read_password) {
+      archive_set_error(w, EINVAL, "Password encryption is supported only for ZIP AES-256"); return ARCHIVE_FATAL;
+    }
+    if (archive_write_set_passphrase(w, read_password) != ARCHIVE_OK ||
+        archive_write_set_format_option(w, "zip", "encryption", write_encryption) != ARCHIVE_OK) return ARCHIVE_FATAL;
+  }
+  if ((format & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_ZIP) {
+    if (strcmp(zip_compression, "store") && strcmp(zip_compression, "deflate")) {
+      archive_set_error(w, EINVAL, "Unsupported ZIP compression method"); return ARCHIVE_FATAL;
+    }
+    if (archive_write_set_format_option(w, "zip", "compression", zip_compression) != ARCHIVE_OK) return ARCHIVE_FATAL;
+  }
   switch (filter) {
     case ARCHIVE_FILTER_NONE: return archive_write_add_filter_none(w);
     case ARCHIVE_FILTER_GZIP: return archive_write_add_filter_gzip(w);
     case ARCHIVE_FILTER_BZIP2: return archive_write_add_filter_bzip2(w);
     case ARCHIVE_FILTER_XZ: return archive_write_add_filter_xz(w);
     case ARCHIVE_FILTER_LZMA: return archive_write_add_filter_lzma(w);
+    case ARCHIVE_FILTER_COMPRESS: return archive_write_add_filter_compress(w);
+    case ARCHIVE_FILTER_LZIP: return archive_write_add_filter_lzip(w);
+    case ARCHIVE_FILTER_LZ4: return archive_write_add_filter_lz4(w);
+    case ARCHIVE_FILTER_ZSTD: return archive_write_add_filter_zstd(w);
     default: return ARCHIVE_FATAL;
   }
 }
@@ -130,27 +271,66 @@ static int format_for_filename(const char *path, int *filter) {
   *filter = ARCHIVE_FILTER_NONE;
   if (suffix(path, ".zip")) return ARCHIVE_FORMAT_ZIP;
   if (suffix(path, ".7z")) return ARCHIVE_FORMAT_7ZIP;
+  if (suffix(path, ".ar") || suffix(path, ".a")) return ARCHIVE_FORMAT_AR;
+  if (suffix(path, ".xar")) return ARCHIVE_FORMAT_XAR;
   if (suffix(path, ".cpio")) return ARCHIVE_FORMAT_CPIO;
   if (suffix(path, ".tar")) return ARCHIVE_FORMAT_TAR;
-  if (suffix(path, ".gz") || suffix(path, ".tgz")) *filter = ARCHIVE_FILTER_GZIP;
+  if (suffix(path, ".tar.gz") || suffix(path, ".tgz")) {
+    *filter = ARCHIVE_FILTER_GZIP;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.bz2") || suffix(path, ".tbz") || suffix(path, ".tbz2")) {
+    *filter = ARCHIVE_FILTER_BZIP2;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.xz") || suffix(path, ".txz")) {
+    *filter = ARCHIVE_FILTER_XZ;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lzma") || suffix(path, ".tlz")) {
+    *filter = ARCHIVE_FILTER_LZMA;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.zst") || suffix(path, ".tzst")) {
+    *filter = ARCHIVE_FILTER_ZSTD;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lz4") || suffix(path, ".tlz4")) {
+    *filter = ARCHIVE_FILTER_LZ4;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.lzip") || suffix(path, ".tlzip")) {
+    *filter = ARCHIVE_FILTER_LZIP;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".tar.z")) {
+    *filter = ARCHIVE_FILTER_COMPRESS;
+    return ARCHIVE_FORMAT_TAR;
+  }
+  if (suffix(path, ".gz")) *filter = ARCHIVE_FILTER_GZIP;
   else if (suffix(path, ".bz2") || suffix(path, ".tbz") || suffix(path, ".tbz2")) *filter = ARCHIVE_FILTER_BZIP2;
   else if (suffix(path, ".xz") || suffix(path, ".txz")) *filter = ARCHIVE_FILTER_XZ;
   else if (suffix(path, ".lzma") || suffix(path, ".tlz")) *filter = ARCHIVE_FILTER_LZMA;
+  else if (suffix(path, ".zst")) *filter = ARCHIVE_FILTER_ZSTD;
+  else if (suffix(path, ".lz4")) *filter = ARCHIVE_FILTER_LZ4;
+  else if (suffix(path, ".lzip") || suffix(path, ".lz")) *filter = ARCHIVE_FILTER_LZIP;
+  else if (suffix(path, ".z")) *filter = ARCHIVE_FILTER_COMPRESS;
   else return 0;
-  if (suffix(path, ".tar.gz") || suffix(path, ".tgz") || suffix(path, ".tar.bz2") ||
-      suffix(path, ".tbz") || suffix(path, ".tbz2") || suffix(path, ".tar.xz") ||
-      suffix(path, ".txz") || suffix(path, ".tar.lzma") || suffix(path, ".tlz")) return ARCHIVE_FORMAT_TAR;
   return ARCHIVE_FORMAT_RAW;
 }
 static struct archive *reader(const char *path) {
   struct archive *a = archive_read_new();
   archive_read_support_filter_all(a); archive_read_support_format_all(a);
-  int filter; if (format_for_filename(path, &filter) == ARCHIVE_FORMAT_RAW || suffix(path, ".z") || suffix(path, ".zst") || suffix(path, ".lz4") || suffix(path, ".lz")) archive_read_support_format_raw(a);
+  if (*read_password) archive_read_add_passphrase(a, read_password);
+  int filter; if (format_for_filename(path, &filter) == ARCHIVE_FORMAT_RAW ||
+      suffix(path, ".z") || suffix(path, ".zst") || suffix(path, ".lz4") ||
+      suffix(path, ".lz") || suffix(path, ".lzip")) archive_read_support_format_raw(a);
   if (*read_charset && archive_read_set_format_option(a, NULL, "hdrcharset", read_charset) != ARCHIVE_OK) return a;
   if (read_open(a, path) != ARCHIVE_OK) { return a; }
   return a;
 }
 static int next_header(struct archive *a, struct archive_entry **entry, const char *path) {
+  if (!checkpoint(a)) return ARCHIVE_FATAL;
   int rc = archive_read_next_header(a, entry);
   if (rc == ARCHIVE_OK && (archive_format(a) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_RAW) {
     const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
@@ -176,11 +356,11 @@ static int safe_name(const char *s) {
   return 1;
 }
 static char *list_impl(const char *path) {
-  struct archive *a = reader(path); struct archive_entry *e; buffer b = {0}; int rc, count = 0, safe_to_write = 1;
+  struct archive *a = reader(path); struct archive_entry *e; buffer b = {0}; int rc, first = 1, safe_to_write = 1;
   append(&b, "{\"entries\":[");
   while ((rc = next_header(a, &e, path)) == ARCHIVE_OK) {
-    if (++count > 100000) { free(b.s); archive_read_free(a); return error("Archive contains more than 100,000 entries"); }
-    if (count > 1) append(&b, ",");
+    if (!first) append(&b, ",");
+    first = 0;
     const char *name = entry_name(e);
     if (!name || strlen(name) > 4096) { free(b.s); archive_read_free(a); return error("Invalid or excessively long entry path"); }
     if (!safe_name(name) || archive_entry_is_encrypted(e) != 0 || archive_entry_hardlink(e) ||
@@ -188,7 +368,7 @@ static char *list_impl(const char *path) {
     if ((archive_format(a) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_RAW) {
       if (archive_filter_code(a, 0) == ARCHIVE_FILTER_NONE) { free(b.s); archive_read_free(a); return error("Invalid compressed stream"); }
       int64_t size = 0; char data[65536]; la_ssize_t n;
-      while ((n = archive_read_data(a, data, sizeof(data))) > 0) {
+      while ((n = controlled_read(a, data, sizeof(data))) > 0) {
         if (n > INT64_MAX - size) { free(b.s); archive_read_free(a); return error("File size overflow"); }
         size += n;
       }
@@ -196,11 +376,17 @@ static char *list_impl(const char *path) {
       archive_entry_set_size(e, size);
     }
     append(&b, "{\"path\":"); quote(&b, name);
-    append(&b, ",\"size\":%lld,\"modified\":%lld,\"directory\":%s,\"regular\":%s,\"safe\":%s,\"encrypted\":%s}",
+    append(&b, ",\"size\":%lld,\"modified\":%lld,\"directory\":%s,\"regular\":%s,\"safe\":%s,\"encrypted\":%s",
       (long long)archive_entry_size(e), (long long)archive_entry_mtime(e),
       archive_entry_filetype(e) == AE_IFDIR ? "true" : "false",
       archive_entry_filetype(e) == AE_IFREG && !archive_entry_hardlink(e) ? "true" : "false",
       safe_name(name) ? "true" : "false", archive_entry_is_encrypted(e) > 0 ? "true" : "false");
+    if (archive_entry_filetype(e) == AE_IFLNK) {
+      const char *link = archive_entry_symlink_utf8(e);
+      if (!link) link = archive_entry_symlink(e);
+      if (link) { append(&b, ",\"link\":"); quote(&b, link); }
+    }
+    append(&b, "}");
     // Skipping data makes listing fast; decompression happens only on demand.
     if (archive_read_data_skip(a) < ARCHIVE_OK) { rc = ARCHIVE_FATAL; break; }
   }
@@ -220,7 +406,7 @@ static char *extract_impl(const char *path, const char *name, const char *output
     f = hz_fopen(output, "wb"); if (!f) { result = error("Cannot open destination file"); break; }
     touched = 1;
     char data[65536]; la_ssize_t n; int64_t total = 0;
-    while ((n = archive_read_data(a, data, sizeof(data))) > 0) {
+    while ((n = controlled_read(a, data, sizeof(data))) > 0) {
       if (n > limit - total) { result = error("Extraction size limit exceeded"); break; }
       if (fwrite(data, 1, n, f) != (size_t)n) { result = error("Disk write failed"); break; }
       total += n;
@@ -242,7 +428,7 @@ static int target_compare(const void *left, const void *right) {
 }
 static char *extract_batch_impl(const char *path, const char **names, const char **outputs,
     const int64_t *limits, int count, int64_t total_limit, hz_extract_progress progress, hz_extract_detailed_progress detailed) {
-  if (count < 0 || count > 100000 || total_limit < 0) return error("Invalid extraction batch");
+  if (count < 0 || total_limit < 0) return error("Invalid extraction batch");
   if (!count) return ok();
   extract_target *targets = calloc((size_t)count, sizeof(*targets));
   if (!targets) return error("Cannot allocate extraction batch");
@@ -269,7 +455,7 @@ static char *extract_batch_impl(const char *path, const char **names, const char
       continue;
     }
     if (target->touched) { result = error("Duplicate archive entry"); break; }
-    if (archive_entry_filetype(e) != AE_IFREG || archive_entry_hardlink(e) || archive_entry_symlink(e) || archive_entry_is_encrypted(e) > 0) {
+    if (archive_entry_filetype(e) != AE_IFREG || archive_entry_hardlink(e) || archive_entry_symlink(e) || (archive_entry_is_encrypted(e) > 0 && !*read_password)) {
       result = error("Links, encrypted and special files cannot be extracted"); break;
     }
     if (archive_entry_size(e) > target->limit) { result = error("File exceeds extraction size limit"); break; }
@@ -281,7 +467,7 @@ static char *extract_batch_impl(const char *path, const char **names, const char
     int64_t bytes = 0; la_ssize_t n = 0;
     const int64_t file_size = archive_entry_size_is_set(e) ? archive_entry_size(e) : -1;
     if (detailed) detailed(completed, total, target->index, 0, file_size);
-    while ((n = archive_read_data(a, data, 262144)) > 0) {
+    while ((n = controlled_read(a, data, 262144)) > 0) {
       if (n > target->limit - bytes || n > total_limit - total) { result = error("Extraction size limit exceeded"); break; }
       if (fwrite(data, 1, (size_t)n, f) != (size_t)n) { result = error("Disk write failed"); break; }
       bytes += n; total += n;
@@ -308,7 +494,7 @@ static int write_file(struct archive *w, const char *path) {
   FILE *f = hz_fopen(path, "rb"); if (!f) return 0;
   char buf[65536]; size_t n; int success = 1;
   while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-    if (archive_write_data(w, buf, n) != (la_ssize_t)n) { success = 0; break; }
+    if (controlled_write(w, buf, n) != (la_ssize_t)n) { success = 0; break; }
   }
   if (ferror(f)) success = 0;
   fclose(f); return success;
@@ -337,8 +523,8 @@ static char *replace_impl(const char *path, const char *name, const char *replac
       archive_read_data_skip(r);
     } else {
       char buf[65536]; la_ssize_t n;
-      while ((n = archive_read_data(r, buf, sizeof(buf))) > 0) {
-        if (archive_write_data(w, buf, n) != n) { result = error(archive_error_string(w)); break; }
+      while ((n = controlled_read(r, buf, sizeof(buf))) > 0) {
+        if (controlled_write(w, buf, n) != n) { result = error(archive_error_string(w)); break; }
       }
       if (!result && n < 0) result = error(archive_error_string(r));
     }
@@ -352,6 +538,7 @@ static char *replace_impl(const char *path, const char *name, const char *replac
   return result ? result : ok();
 }
 static char *create_impl(const char *output, const char **paths, const char **names, int count) {
+  if (count < 0) return error("Invalid file count");
   hz_stat_t existing; if (!hz_stat(output, &existing)) return error("Output file already exists");
   struct archive *w = archive_write_new();
   int filter, format = format_for_filename(output, &filter);
@@ -361,6 +548,7 @@ static char *create_impl(const char *output, const char **paths, const char **na
   if (!result && configure_writer(w, format, filter, write_charset) != ARCHIVE_OK) result = error(archive_error_string(w));
   if (!result && write_open(w, output) != ARCHIVE_OK) result = error(archive_error_string(w));
   for (int i = 0; !result && i < count; i++) {
+    if (!checkpoint(w)) { result = error("Operation cancelled"); break; }
     hz_stat_t st;
     if (!safe_name(names[i]) || hz_stat(paths[i], &st) || (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) || (format == ARCHIVE_FORMAT_RAW && !S_ISREG(st.st_mode))) { result = error("Invalid input file"); break; }
     struct archive_entry *e = archive_entry_new(); archive_entry_set_pathname_utf8(e, names[i]);
@@ -380,7 +568,7 @@ static char *update_impl(const char *path, const char *output, const char **path
     const char **names, int count, const char **removed, int remove_count) {
   hz_stat_t existing;
   if (!strcmp(path, output) || !hz_stat(output, &existing)) return error("Output must be a new separate file");
-  if (count < 0 || count > 100000 || remove_count < 0 || remove_count > 100000) return error("Invalid batch size");
+  if (count < 0 || remove_count < 0) return error("Invalid batch size");
   const char **sorted = malloc((size_t)(count ? count : 1) * sizeof(char *));
   const char **removed_sorted = malloc((size_t)(remove_count ? remove_count : 1) * sizeof(char *));
   if (!sorted || !removed_sorted) { free(sorted); free(removed_sorted); return error("Out of memory"); }
@@ -413,14 +601,15 @@ static char *update_impl(const char *path, const char *output, const char **path
     archive_entry_set_pathname_utf8(e, utf8_name); free(utf8_name);
     if (archive_write_header(w, e) != ARCHIVE_OK) { result = error(archive_error_string(w)); break; }
     char buf[65536]; la_ssize_t n;
-    while ((n = archive_read_data(r, buf, sizeof(buf))) > 0) {
-      if (archive_write_data(w, buf, n) != n) { result = error("Archive update failed"); break; }
+    while ((n = controlled_read(r, buf, sizeof(buf))) > 0) {
+      if (controlled_write(w, buf, n) != n) { result = error("Archive update failed"); break; }
     }
     if (!result && n < 0) result = error(archive_error_string(r));
     if (!result && archive_write_finish_entry(w) != ARCHIVE_OK) result = error(archive_error_string(w));
   }
   if (!result && rc != ARCHIVE_EOF) result = error(archive_error_string(r));
   for (int i = 0; !result && i < count; i++) {
+    if (!checkpoint(w)) { result = error("Operation cancelled"); break; }
     hz_stat_t st;
     if (hz_stat(paths[i], &st) || (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode))) { result = error("Invalid imported file"); break; }
     e = archive_entry_new(); archive_entry_set_pathname_utf8(e, names[i]);
@@ -438,7 +627,85 @@ static char *update_impl(const char *path, const char *output, const char **path
   return result ? result : ok();
 }
 
+// Rebuild without extracting entries: preserve metadata and stream the data once.
+static char *rename_impl(const char *path, const char *old_name, const char *new_name, const char *output) {
+  hz_stat_t st;
+  if (!safe_name(old_name) || !safe_name(new_name) || !strcmp(path, output) || !hz_stat(output, &st)) return error("Invalid rename paths");
+  struct archive *r = reader(path), *w = archive_write_new(); struct archive_entry *e;
+  int rc = next_header(r, &e, path), found = 0; char *result = NULL;
+  if (!writable_format(archive_format(r), archive_filter_code(r, 0))) result = error("This archive format cannot be updated");
+  if (!result && configure_writer(w, archive_format(r), archive_filter_code(r, 0), "UTF-8") != ARCHIVE_OK) result = error(archive_error_string(w));
+  if (!result && write_open(w, output) != ARCHIVE_OK) result = error(archive_error_string(w));
+  size_t prefix = strlen(old_name);
+  for (; !result && rc == ARCHIVE_OK; rc = next_header(r, &e, path)) {
+    const char *name = entry_name(e);
+    if (!name || !safe_name(name) || archive_entry_is_encrypted(e) != 0 || archive_entry_hardlink(e) ||
+        (archive_entry_filetype(e) != AE_IFREG && archive_entry_filetype(e) != AE_IFDIR)) { result = error("Only safe unencrypted entries can be renamed"); break; }
+    int match = !strcmp(name, old_name) || (!strncmp(name, old_name, prefix) && name[prefix] == '/');
+    char *renamed = NULL;
+    if (match) {
+      found++;
+      size_t size = strlen(new_name) + strlen(name + prefix) + 1;
+      renamed = malloc(size);
+      if (!renamed) { result = error("Out of memory"); break; }
+      snprintf(renamed, size, "%s%s", new_name, name + prefix);
+    } else if (!strcmp(name, new_name) || (!strncmp(name, new_name, strlen(new_name)) && name[strlen(new_name)] == '/')) {
+      result = error("Rename destination already exists"); break;
+    }
+    if (!renamed) renamed = strdup(name);
+    if (!renamed) { result = error("Out of memory"); break; }
+    archive_entry_set_pathname_utf8(e, renamed);
+    free(renamed);
+    if (archive_write_header(w, e) != ARCHIVE_OK) { result = error(archive_error_string(w)); break; }
+    char bytes[65536]; la_ssize_t n;
+    while ((n = controlled_read(r, bytes, sizeof(bytes))) > 0) {
+      if (controlled_write(w, bytes, n) != n) { result = error(archive_error_string(w)); break; }
+    }
+    if (!result && n < 0) result = error(archive_error_string(r));
+    if (!result && archive_write_finish_entry(w) != ARCHIVE_OK) result = error(archive_error_string(w));
+  }
+  if (!result && rc != ARCHIVE_EOF) result = error(archive_error_string(r));
+  if (!result && !found) result = error("Entry not found");
+  if (archive_write_close(w) != ARCHIVE_OK && !result) result = error(archive_error_string(w));
+  archive_write_free(w); archive_read_free(r);
+  if (result) hz_remove(output);
+  return result ? result : ok();
+}
+static char *verify_impl(const char *path) {
+  struct archive *r = reader(path); struct archive_entry *e; int rc; char *result = NULL;
+  int64_t files = 0, bytes = 0; char block[65536]; la_ssize_t n;
+  while ((rc = next_header(r, &e, path)) == ARCHIVE_OK) {
+    if ((archive_format(r) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_RAW && archive_filter_code(r, 0) == ARCHIVE_FILTER_NONE) { result = error("Invalid compressed stream"); break; }
+    files++;
+    while ((n = controlled_read(r, block, sizeof(block))) > 0) {
+      if (n > INT64_MAX - bytes) { result = error("Uncompressed size overflow"); break; }
+      bytes += n;
+    }
+    if (!result && n < 0) result = error(archive_error_string(r));
+    if (result) break;
+  }
+  if (!result && rc != ARCHIVE_EOF) result = error(archive_error_string(r));
+  archive_read_free(r);
+  if (!result) { buffer b = {0}; append(&b, "{\"ok\":true,\"files\":%lld,\"bytes\":%lld}", (long long)files, (long long)bytes); result = b.s; }
+  return result;
+}
+
 HZ_EXPORT void hz_free(char *result) { free(result); }
+
+HZ_EXPORT char *hz_set_read_only(const char *path, int read_only) {
+#ifdef _WIN32
+  wchar_t *name = wide(path);
+  DWORD attributes = name ? GetFileAttributesW(name) : INVALID_FILE_ATTRIBUTES;
+  int success = attributes != INVALID_FILE_ATTRIBUTES && SetFileAttributesW(name,
+    read_only ? attributes | FILE_ATTRIBUTE_READONLY : attributes & ~FILE_ATTRIBUTE_READONLY);
+  free(name);
+#else
+  struct stat st;
+  int success = !lstat(path, &st) && !S_ISLNK(st.st_mode) &&
+    !chmod(path, read_only ? st.st_mode & ~0222 : st.st_mode | 0200);
+#endif
+  return success ? ok() : error("Cannot set temporary file read-only permissions");
+}
 
 // libarchive uses locale conversions internally even with UTF-8 ZIP headers.
 // Scope UTF-8 to the worker thread; never mutate the app's global locale.
@@ -463,10 +730,10 @@ static locale_guard enter_utf8(void) {
 static void leave_utf8(locale_guard g) { if (g.current) { uselocale(g.previous); freelocale(g.current); } }
 #endif
 HZ_EXPORT char *hz_list(const char *path) {
-  locale_guard g = enter_utf8(); char *r = list_impl(path); leave_utf8(g); return r;
+  locale_guard g = enter_utf8(); char *r = hz_rar_probe(path) ? hz_rar_list(path, read_password, rar_checkpoint) : list_impl(path); leave_utf8(g); return r;
 }
 HZ_EXPORT char *hz_extract(const char *path, const char *entry, const char *output, int64_t limit) {
-  locale_guard g = enter_utf8(); char *r = extract_impl(path, entry, output, limit); leave_utf8(g); return r;
+  locale_guard g = enter_utf8(); char *r = hz_rar_probe(path) ? hz_rar_extract(path, read_password, &entry, &output, &limit, 1, limit, rar_checkpoint, NULL, NULL) : extract_impl(path, entry, output, limit); leave_utf8(g); return r;
 }
 HZ_EXPORT char *hz_replace(const char *path, const char *entry, const char *replacement, const char *output) {
   locale_guard g = enter_utf8(); char *r = replace_impl(path, entry, replacement, output); leave_utf8(g); return r;
@@ -481,12 +748,40 @@ HZ_EXPORT char *hz_update(const char *path, const char *output, const char **pat
 
 HZ_EXPORT char *hz_extract_batch(const char *path, const char **names, const char **outputs, const int64_t *limits, int count, int64_t total_limit, hz_extract_progress progress) {
   locale_guard g = enter_utf8();
-  char *r = extract_batch_impl(path, names, outputs, limits, count, total_limit, progress, NULL);
+  char *r = hz_rar_probe(path) ? hz_rar_extract(path, read_password, names, outputs, limits, count, total_limit, rar_checkpoint, progress, NULL) : extract_batch_impl(path, names, outputs, limits, count, total_limit, progress, NULL);
   leave_utf8(g); return r;
 }
 
 HZ_EXPORT char *hz_extract_batch_detailed(const char *path, const char **names, const char **outputs, const int64_t *limits, int count, int64_t total_limit, hz_extract_detailed_progress progress) {
   locale_guard g = enter_utf8();
-  char *r = extract_batch_impl(path, names, outputs, limits, count, total_limit, NULL, progress);
+  char *r = hz_rar_probe(path) ? hz_rar_extract(path, read_password, names, outputs, limits, count, total_limit, rar_checkpoint, NULL, progress) : extract_batch_impl(path, names, outputs, limits, count, total_limit, NULL, progress);
   leave_utf8(g); return r;
+}
+
+HZ_EXPORT char *hz_rename(const char *path, const char *old_name, const char *new_name, const char *output) {
+  locale_guard g = enter_utf8(); char *r = rename_impl(path, old_name, new_name, output); leave_utf8(g); return r;
+}
+HZ_EXPORT char *hz_verify(const char *path) {
+  locale_guard g = enter_utf8(); char *r = hz_rar_probe(path) ? hz_rar_verify(path, read_password, rar_checkpoint) : verify_impl(path); leave_utf8(g); return r;
+}
+
+HZ_EXPORT char *hz_publish_new(const char *source, const char *destination) {
+#ifdef _WIN32
+  wchar_t *s = wide(source), *d = wide(destination);
+  int success = s && d && MoveFileExW(s, d, MOVEFILE_WRITE_THROUGH);
+  free(s); free(d);
+  return success ? ok() : error("Cannot publish new output without replacing an existing file");
+#else
+#if defined(__APPLE__)
+  return renamex_np(source, destination, RENAME_EXCL) == 0 ? ok() : error("Cannot publish output without replacing an existing item");
+#elif defined(__linux__) || defined(__ANDROID__)
+  return syscall(SYS_renameat2, AT_FDCWD, source, AT_FDCWD, destination, 1) == 0 ? ok() : error("Cannot publish output without replacing an existing item");
+#else
+  hz_stat_t st;
+  if (lstat(source, &st) || S_ISDIR(st.st_mode)) return error("Exclusive directory publication is unavailable on this platform");
+  if (link(source, destination)) return error("Cannot publish new output without replacing an existing file");
+  if (unlink(source)) { unlink(destination); return error("Cannot release staged output"); }
+  return ok();
+#endif
+#endif
 }

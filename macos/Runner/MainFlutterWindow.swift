@@ -3,6 +3,56 @@ import FlutterMacOS
 import hizip_native
 import desktop_multi_window
 
+private final class AuxiliaryDialogModalHost: NSObject, NSWindowDelegate {
+  private weak var window: NSWindow?
+  private let channel: FlutterMethodChannel
+  private weak var previousDelegate: NSWindowDelegate?
+  private var session: NSApplication.ModalSession?
+  private var timer: Timer?
+
+  init(channel: FlutterMethodChannel) { self.channel = channel }
+
+  func begin(_ window: NSWindow) {
+    if session != nil { return }
+    self.window = window
+    if window.delegate !== self { previousDelegate = window.delegate }
+    window.delegate = self
+    session = NSApp.beginModalSession(for: window)
+    let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+      guard let self = self, let session = self.session else { return }
+      if self.window?.isVisible != true {
+        self.end()
+        self.channel.invokeMethod("closeRequested", arguments: nil)
+        return
+      }
+      NSApp.runModalSession(session)
+    }
+    self.timer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  func end() {
+    timer?.invalidate()
+    timer = nil
+    if let session = session { NSApp.endModalSession(session) }
+    session = nil
+  }
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    channel.invokeMethod("closeRequested", arguments: nil)
+    return false
+  }
+
+  override func responds(to selector: Selector!) -> Bool {
+    super.responds(to: selector) || previousDelegate?.responds(to: selector) == true
+  }
+
+  override func forwardingTarget(for selector: Selector!) -> Any? {
+    if previousDelegate?.responds(to: selector) == true { return previousDelegate }
+    return super.forwardingTarget(for: selector)
+  }
+}
+
 private final class TrafficLightTitlebar: NSTitlebarAccessoryViewController {
   private weak var host: NSWindow?
 
@@ -91,11 +141,20 @@ class MainFlutterWindow: HizipPreviewWindow {
     FlutterMultiWindowPlugin.setOnWindowCreatedCallback { controller in
       RegisterGeneratedPlugins(registry: controller)
       let channel = FlutterMethodChannel(name: "dev.hizip/task-window-host", binaryMessenger: controller.engine.binaryMessenger)
+      let modalHost = AuxiliaryDialogModalHost(channel: channel)
       channel.setMethodCallHandler { [weak controller] call, result in
-        guard call.method == "nativePointer", let window = controller?.view.window else {
+        guard let window = controller?.view.window else {
           result(FlutterError(code: "no_window", message: "Task window is unavailable", details: nil)); return
         }
-        result(Int(bitPattern: Unmanaged.passUnretained(window).toOpaque()))
+        switch call.method {
+        case "nativePointer": result(Int(bitPattern: Unmanaged.passUnretained(window).toOpaque()))
+        case "beginModal":
+          modalHost.begin(window)
+          window.makeFirstResponder(controller?.view)
+          result(nil)
+        case "endModal": modalHost.end(); result(nil)
+        default: result(FlutterMethodNotImplemented)
+        }
       }
     }
 

@@ -18,9 +18,11 @@ A new Flutter FFI plugin project.
   # paths, so Classes contains a forwarder C file that relatively imports
   # `../src/*` so that the C sources can be shared among all target platforms.
   s.source           = { :path => '.' }
+  # Classes/Unrar contains forwarders for the upstream library units.
   s.source_files = 'Classes/**/*'
-  s.libraries = 'archive'
-  s.frameworks = 'Quartz', 'UniformTypeIdentifiers'
+  s.resource_bundles = { 'hizip_native_licenses' => ['Resources/*.txt'] }
+  s.libraries = 'archive', 'c++'
+  s.frameworks = 'Quartz', 'UniformTypeIdentifiers', 'FinderSync'
 
   # If your plugin requires a privacy manifest, for example if it collects user
   # data, update the PrivacyInfo.xcprivacy file to describe your plugin's
@@ -31,6 +33,8 @@ A new Flutter FFI plugin project.
   s.dependency 'FlutterMacOS'
 
   s.platform = :osx, '12.0'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES',
+    'CLANG_CXX_LANGUAGE_STANDARD' => 'c++11',
+    'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited) RARDLL _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE' }
   s.swift_version = '5.0'
 end

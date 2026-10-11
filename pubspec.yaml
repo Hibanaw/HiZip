@@ -23,11 +23,19 @@ dependencies:
   forui: 0.21.3
   nativeapi:
     path: packages/nativeapi
+  libadwaita: ^2.0.2
   desktop_multi_window: ^0.3.1
   shared_preferences: ^2.5.6
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+dependency_overrides:
+  cnativeapi:
+    path: packages/cnativeapi
+
 flutter:
   uses-material-design: true

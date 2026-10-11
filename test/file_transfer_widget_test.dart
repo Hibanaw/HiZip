@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:hizip/ui/desktop_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -13,6 +15,30 @@ import 'package:hizip/ui/file_context_menu.dart';
 
 class TransferService extends ArchiveService {
   List<ArchiveEntry> exported = [];
+  int exportCalls = 0, openCalls = 0;
+
+  @override
+  Future<Map<String, dynamic>> capabilities() async => {
+    'writableFormats': ['zip'],
+    'zipAES256': false,
+  };
+
+  @override
+  Future<OpenedArchiveFile> open(
+    ArchiveDocument doc,
+    ArchiveEntry entry,
+  ) async {
+    openCalls++;
+    return OpenedArchiveFile(
+      doc.path,
+      entry.path,
+      '/tmp/${entry.name}',
+      '',
+      '',
+      FileStat.statSync('/tmp/hizip-missing-test-file'),
+    );
+  }
+
   List<String> imported = [];
   String? destination;
   @override
@@ -20,6 +46,7 @@ class TransferService extends ArchiveService {
     ArchiveDocument doc,
     List<ArchiveEntry> entries,
   ) async {
+    exportCalls++;
     exported = entries;
     return entries.map((e) => '/tmp/${e.name}').toList();
   }
@@ -31,6 +58,7 @@ class TransferService extends ArchiveService {
     String folder, {
     List<ArchiveEntry> moving = const [],
     String? expectedArchiveHash,
+    List<ArchiveEntry> commentSources = const [],
   }) async {
     imported = sources;
     destination = folder;
@@ -52,6 +80,30 @@ class TransferClipboard extends FileTransferClipboard {
 class TransferDesktop extends DesktopIntegration {
   @override
   bool get supportsQuickLook => false;
+}
+
+class DragDesktop extends TransferDesktop {
+  int starts = 0, prepared = 0;
+  @override
+  bool get supportsQuickLook => true;
+  @override
+  Future<DefaultApplication?> defaultApplication(String name) async => null;
+  @override
+  Future<void> prepareFileDrag(
+    List<String> paths, {
+    required bool movable,
+    required List<double> frame,
+  }) async {
+    if (paths.isNotEmpty) prepared++;
+  }
+
+  @override
+  Future<void> startFileDrag(
+    List<String> paths, {
+    required bool movable,
+  }) async {
+    starts++;
+  }
 }
 
 void main() {
@@ -110,6 +162,83 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+  testWidgets(
+    'clicking and opening do not export for drag; actual drag exports once',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        DesktopIntegration.channel,
+        (call) async {
+          if (call.method == 'quickLookVisible') return false;
+          if (call.method == 'configureMenus') return <String>[];
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          DesktopIntegration.channel,
+          null,
+        ),
+      );
+      final service = TransferService(), desktop = DragDesktop();
+      final doc = ArchiveDocument(
+        '/sample.zip',
+        const [
+          ArchiveEntry(path: 'one.bin', size: 4, directory: false),
+          ArchiveEntry(path: 'two.bin', size: 4, directory: false),
+        ],
+        'ZIP',
+        true,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: foruiBuilder,
+          home: ArchiveWorkspace(
+            service: service,
+            desktop: desktop,
+            initialDocument: doc,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('file-one.bin')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const ValueKey('file-two.bin')));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(service.exportCalls, 0);
+      expect(desktop.prepared, 0);
+      await tester.tap(find.byKey(const ValueKey('file-two.bin')));
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(find.byKey(const ValueKey('file-two.bin')));
+      await tester.pumpAndSettle();
+      expect(service.openCalls, 1);
+      expect(service.exportCalls, 0);
+      expect(desktop.starts, 0);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('file-one.bin'))),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(service.exportCalls, 0);
+      await gesture.moveBy(const Offset(3, 0));
+      await tester.pump();
+      expect(service.exportCalls, 0);
+      await gesture.moveBy(const Offset(60, 0));
+      await tester.pumpAndSettle();
+      await gesture.moveBy(const Offset(30, 0));
+      await tester.pumpAndSettle();
+      expect(service.exportCalls, 1);
+      expect(desktop.starts, 1);
+      await gesture.up();
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await service.dispose();
+    },
+  );
+
   testWidgets(
     'drag crosses the threshold once and cancels double click activation',
     (tester) async {

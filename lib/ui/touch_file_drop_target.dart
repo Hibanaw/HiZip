@@ -1,3 +1,5 @@
+import 'desktop_widgets.dart';
+
 import 'package:flutter/material.dart';
 
 class TouchFileDropController extends ChangeNotifier {
@@ -94,8 +96,12 @@ class _TouchFileDropTargetState extends State<TouchFileDropTarget> {
               child: DecoratedBox(
                 key: const ValueKey('touch-drop-highlight'),
                 decoration: BoxDecoration(
-                  color: const Color(0x123478f6),
-                  border: Border.all(color: const Color(0xff3478f6), width: 2),
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: .12),
+                  border: Border.all(
+                    color: desktopAccentForeground(context),
+                    width: 2,
+                  ),
                 ),
               ),
             ),

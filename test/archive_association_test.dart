@@ -41,4 +41,36 @@ void main() {
     settings.dispose();
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets('default association is available on Linux without Quick Look', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final settings = AppSettings();
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      settings.dispose();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: desktopTheme(),
+        builder: foruiBuilder,
+        home: SettingsPage(settings: settings),
+      ),
+    );
+    await tester.tap(find.text('通用'));
+    await tester.pumpAndSettle();
+    final desktop = DesktopIntegration();
+    expect(desktop.supportsDefaultApplication, isTrue);
+    expect(desktop.supportsQuickLook, isFalse);
+    final button = tester.widget<DesktopButton>(
+      find.ancestor(
+        of: find.text('设为默认打开方式'),
+        matching: find.byType(DesktopButton),
+      ),
+    );
+    expect(button.onPressed, isNotNull);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+  });
 }

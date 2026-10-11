@@ -1,18 +1,21 @@
-import { common, Want, wantConstant } from '@kit.AbilityKit';
+import { common, Want, AbilityConstant } from '@kit.AbilityKit';
 import { fileIo as fs, picker, fileUri } from '@kit.CoreFileKit';
 import { preferences, uniformTypeDescriptor } from '@kit.ArkData';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { window } from '@kit.ArkUI';
 import {
   FlutterPlugin, FlutterPluginBinding, AbilityAware, AbilityPluginBinding,
-  MethodCall, MethodCallHandler, MethodResult, MethodChannel, EventChannel,
+  MethodCall, MethodCallHandler, MethodResult, MethodChannel, EventChannel, FlutterAbility, NewWantListener,
 } from '@ohos/flutter_ohos';
 
 import { WindowInsets } from './WindowInsets';
 import { HostWindow } from './HostWindow';
+import { SystemFiles } from './SystemFiles';
 
 // Public document URIs stay here. C/FFI and Dart receive private local paths only.
-export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, MethodCallHandler {
+export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, MethodCallHandler, NewWantListener {
+  private binding: AbilityPluginBinding | null = null;
+  private pendingUris: string[] = [];
   private saves: Map<string, string> = new Map();
   private directories: Map<string, string> = new Map();
   private channel: MethodChannel | null = null;
@@ -51,17 +54,32 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.directories.clear();
   }
   onAttachedToAbility(binding: AbilityPluginBinding): void {
+    this.binding = binding;
+    binding.addOnNewWantListener(this);
+    this.receiveWant((binding.getAbility() as FlutterAbility).getWant());
     this.abilityContext = binding.getAbility().context;
     this.insets?.attach(this.abilityContext);
     this.hostWindow?.attach(this.abilityContext);
   }
   onDetachedFromAbility(): void {
+    this.binding?.removeOnNewWantListener(this);
+    this.binding = null;
     this.hostWindow?.detach();
     this.insets?.detach();
     this.abilityContext = null;
     this.saves.clear();
     this.directories.clear();
   }
+  onNewWant(want: Want, _launchParams: AbilityConstant.LaunchParam): void {
+    this.receiveWant(want);
+    this.channel?.invokeMethod('openFilesChanged', null);
+  }
+  private receiveWant(want: Want): void {
+    if (want.action === 'ohos.want.action.viewData' && want.uri?.startsWith('file://')) {
+      this.pendingUris.push(want.uri);
+    }
+  }
+
   private get context(): common.UIAbilityContext {
     if (!this.abilityContext) throw new Error('No UIAbility is attached.');
     return this.abilityContext;
@@ -192,6 +210,18 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     switch (call.method) {
       case 'windowInsets':
         result.success(await this.insets?.current()); return;
+      case 'pendingOpenFiles': {
+        const paths: string[] = [];
+        while (this.pendingUris.length > 0) {
+          const uri = this.pendingUris[0];
+          const path = await this.workspace() + '/' + this.name(uri);
+          await this.copy(uri, path);
+          paths.push(path);
+          this.pendingUris.shift();
+        }
+        result.success(paths);
+        return;
+      }
       case 'hostInfo': {
         const capabilities: string[] = ['documents', 'openWithDefault', 'preferences', 'cacheDirectory', 'supportDirectory', 'windowState', 'windowEvents'];
         if (canIUse('SystemCapability.FileManagement.UserFileService.FolderSelection')) capabilities.push('directoryImport');
@@ -300,9 +330,11 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         return;
       }
       case 'openFile':
+      case 'openContents':
       case 'openFiles': {
         const options = new picker.DocumentSelectOptions();
         options.maxSelectNumber = call.method === 'openFile' ? 1 : 100;
+        if (call.method === 'openContents') options.selectMode = picker.DocumentSelectMode.MIXED;
         const filters = this.suffixFilters(call);
         if (filters.length > 0) options.fileSuffixFilters = filters;
         const uris = await new picker.DocumentViewPicker(this.context).select(options);
@@ -310,7 +342,12 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         for (const uri of uris) {
           // Separate roots retain original names, including same-named documents.
           const path = await this.workspace() + '/' + this.name(uri);
-          await this.copy(uri, path);
+          if (call.method === 'openContents' && (await fs.stat(uri)).isDirectory()) {
+            await fs.copy(uri, fileUri.getUriFromPath(path));
+            await this.validateTree(path);
+          } else {
+            await this.copy(uri, path);
+          }
           paths.push(path);
         }
         result.success(call.method === 'openFile' ? (paths.length === 0 ? null : paths[0]) : paths);
@@ -351,6 +388,11 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success(path);
         return;
       }
+      case 'hasSaveLocation': {
+        const path = call.argument('path') as string;
+        result.success(typeof path === 'string' && this.saves.has(path));
+        return;
+      }
       case 'finishSave': {
         const path = this.localPath(call);
         const uri = this.saves.get(path);
@@ -378,8 +420,24 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         const path = this.localPath(call);
         const checkedRoot = this.sandboxPath(root);
         const uri = this.directories.get(checkedRoot);
-        if (!uri || !path.startsWith(checkedRoot + '/')) throw new Error('Invalid export location.');
+        if (!uri || (path !== checkedRoot && !path.startsWith(checkedRoot + '/'))) throw new Error('Invalid export location.');
         if (!(await fs.lstat(path)).isDirectory()) throw new Error('Export source must be a directory.');
+        if (path === checkedRoot) {
+          await this.validateTree(path);
+          const names = await fs.listFile(path);
+          // Preflight all collisions before publishing any selected entries.
+          for (const name of names) {
+            if (await fs.access(uri + '/' + encodeURIComponent(name))) {
+              throw new Error('An exported entry already exists: ' + name);
+            }
+          }
+          for (const name of names) {
+            await fs.copy(fileUri.getUriFromPath(path + '/' + name), uri + '/' + encodeURIComponent(name));
+          }
+          this.directories.delete(checkedRoot);
+          result.success(uri);
+          return;
+        }
         const target = uri + '/' + encodeURIComponent(this.name(path));
         await this.validateExportPath(path);
         // mkdir accepts sandbox paths only; copy supports authorized document URIs.
@@ -389,6 +447,16 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success(target);
         return;
       }
+      case 'fileIcon': {
+        result.success(await new SystemFiles(this.context).icon(
+          call.argument('path') as string, call.argument('directory') === true));
+        return;
+      }
+      case 'applicationsForFile': {
+        result.success([{ name: '系统默认应用', path: 'system', icon: null, default: true }]);
+        return;
+      }
+      case 'openWith':
       case 'openWithDefault': {
         const path = this.localPath(call);
         await this.validateExportPath(path);
@@ -397,14 +465,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         if (writable !== null && writable !== undefined && typeof writable !== 'boolean') {
           throw new Error('Invalid file access mode.');
         }
-        const want: Want = {
-          action: 'ohos.want.action.viewData',
-          uri: fileUri.getUriFromPath(path),
-          type: this.documentMimeType(path, call.argument('mimeType') as string | null),
-          flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION |
-            (writable ? wantConstant.Flags.FLAG_AUTH_WRITE_URI_PERMISSION : 0),
-        };
-        await this.context.startAbility(want);
+        await new SystemFiles(this.context).open(path,
+          this.documentMimeType(path, call.argument('mimeType') as string | null),
+          writable === true, (call.argument('application') as string | null) ?? 'system');
         result.success(null);
         return;
       }

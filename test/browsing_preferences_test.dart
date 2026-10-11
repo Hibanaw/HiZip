@@ -35,6 +35,12 @@ void main() {
         inspector: false,
         sidebarWidth: 280,
         inspectorWidth: 320,
+        listSortColumn: 'modified',
+        listSortAscending: false,
+        listNameWidth: 360,
+        listSizeWidth: 100,
+        listModifiedWidth: 150,
+        listKindWidth: 110,
       ),
     );
     final second = create();
@@ -72,6 +78,30 @@ void main() {
     final restored = BrowsingPreferences.fromJson(legacy.toJson());
     expect(restored.toJson(), legacy.toJson());
   });
+
+  test(
+    'saved grid sizes above the new maximum migrate without resetting',
+    () async {
+      final settings = create();
+      for (final size in [32, 64, 128, 144, 180, 256]) {
+        stored = jsonEncode({
+          'view': 'list',
+          'gridIconSize': size,
+          'galleryIconSize': 160,
+        });
+        await settings.load();
+        expect(settings.browsing.gridIconSize, size.clamp(32, 144));
+        expect(settings.browsing.galleryIconSize, 160);
+      }
+      for (final size in [31, 257, 'invalid']) {
+        expect(
+          BrowsingPreferences.fromJson({'gridIconSize': size}).gridIconSize,
+          64,
+        );
+      }
+      settings.dispose();
+    },
+  );
 
   test('overlapping changes persist the latest layout', () async {
     final gate = Completer<void>(), started = Completer<void>();
@@ -171,11 +201,11 @@ void main() {
     DesktopSlider slider() =>
         tester.widget<DesktopSlider>(find.byType(DesktopSlider));
     expect(slider().min, 32);
-    expect(slider().max, 256);
-    slider().onChanged!(256);
+    expect(slider().max, 144);
+    slider().onChanged!(144);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(restored.browsing.gridIconSize, 256);
+    expect(restored.browsing.gridIconSize, 144);
     tester.view.physicalSize = const Size(700, 900);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -207,10 +237,10 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.byTooltip('图标视图'));
     await tester.pumpAndSettle();
-    expect(slider().value, 256);
+    expect(slider().value, 144);
     final persisted = create();
     await persisted.load();
-    expect(persisted.browsing.gridIconSize, 256);
+    expect(persisted.browsing.gridIconSize, 144);
     expect(persisted.browsing.listIconSize, 12);
     expect(persisted.browsing.columnIconSize, 12);
     persisted.dispose();

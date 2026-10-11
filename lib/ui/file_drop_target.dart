@@ -1,3 +1,5 @@
+import 'desktop_widgets.dart';
+
 import 'package:flutter/material.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -43,8 +45,12 @@ class _FileDropTargetState extends State<FileDropTarget> {
             child: IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: const Color(0x123478f6),
-                  border: Border.all(color: const Color(0xff3478f6), width: 2),
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: .12),
+                  border: Border.all(
+                    color: desktopAccentForeground(context),
+                    width: 2,
+                  ),
                 ),
               ),
             ),

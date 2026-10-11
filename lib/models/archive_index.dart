@@ -34,6 +34,7 @@ class ArchiveIndex {
           }
         }
         sizes.update(path, (v) => v + entry.size, ifAbsent: () => entry.size);
+        descendants.update(path, (v) => v + 1, ifAbsent: () => 1);
         parent = path;
       }
       totalSize += entry.size;
@@ -64,6 +65,8 @@ class ArchiveIndex {
   final children = <String, List<ArchiveEntry>>{};
   final sizes = <String, int>{};
   final counts = <String, int>{};
+  // Entries at or below each path, so inspectors need no per-build scan.
+  final descendants = <String, int>{};
   int totalSize = 0;
   List<ArchiveEntry> inFolder(String folder) => children[folder] ?? const [];
 }

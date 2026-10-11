@@ -40,6 +40,13 @@ post_install do |installer|
     flutter_additional_macos_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '12.0'
+      if target.name == 'super_native_extensions' && config.name != 'Debug'
+        # Rust 1.97's stripped proc-macro dylibs fail dyld's macOS 27 alignment
+        # checks. Keep debug information only for host build dependencies.
+        # https://github.com/rust-lang/rust/issues/157750
+        config.build_settings['CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG'] = '1'
+        config.build_settings['CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP'] = 'none'
+      end
     end
   end
 end

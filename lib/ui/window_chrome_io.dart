@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'app_localizations.dart';
+import '../services/app_settings.dart';
+
 import 'dart:io';
 import 'dart:ffi' as ffi;
 
@@ -7,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:nativeapi/nativeapi.dart' as native;
 
 import 'desktop_widgets.dart';
+import 'window_close_button.dart';
 
 bool _enabled = false, _secondary = false, _harmony = false;
 native.Window? _window;
@@ -193,9 +197,10 @@ class _WindowControlsState extends State<_WindowControls> {
           }
         }),
       ),
-      DesktopIconButton(
-        tooltip: '关闭',
-        icon: const Icon(Icons.close, size: 17),
+      WindowCloseButton(
+        platform: Platform.isLinux
+            ? TargetPlatform.linux
+            : TargetPlatform.windows,
         onPressed: () {
           if (_secondary) {
             (_closeSecondary ?? widget.window.hide)();
@@ -239,12 +244,14 @@ void configureTaskWindow(Map<String, dynamic> parent) {
     );
     window.bounds = rect;
   }
-  window.title = 'HiZip · 操作信息';
+  window.title =
+      'HiZip · ${translateAppText('操作信息', AppSettings.instance.locale.languageCode)}';
 }
 
 void configureSettingsWindow() {
   _window!
-    ..title = 'HiZip · 设置'
+    ..title =
+        'HiZip · ${translateAppText('设置', AppSettings.instance.locale.languageCode)}'
     ..minimumSize = const Size(440, 360);
   _window!.setSize(const Size(600, 440), false);
   _window!.center();
@@ -252,4 +259,49 @@ void configureSettingsWindow() {
 
 void setAuxiliaryWindowTitle(String title) {
   _window?.title = title;
+}
+
+void configurePropertiesWindow() {
+  _window!.minimumSize = const Size(320, 340);
+  _window!.setSize(const Size(380, 600), false);
+  _window!.center();
+}
+
+void configureAuxiliaryDialogWindow(String kind, Map<String, dynamic> parent) {
+  final window = _window!;
+  final title = switch (kind) {
+    'create' => '创建压缩包',
+    'password' => '输入压缩包密码',
+    'extraction' => '解压选项',
+    'transfer' => '目录',
+    'rename' => '重命名',
+    'entryName' => '创建',
+    _ => '操作信息',
+  };
+  window.title =
+      'HiZip · ${translateAppText(title, AppSettings.instance.locale.languageCode)}';
+  window.minimumSize = const Size(380, 280);
+  window.isResizable = true;
+  window.isMinimizable = false;
+  final parentHeight = (parent['height'] as num?)?.toDouble() ?? 800;
+  final width = kind == 'create' ? 520.0 : 480.0;
+  final height =
+      (kind == 'create'
+              ? 720.0
+              : kind == 'transfer'
+              ? 440.0
+              : 360.0)
+          .clamp(280.0, (parentHeight - 80).clamp(280.0, 720.0));
+  window.setSize(Size(width, height), false);
+  if (parent.isEmpty) {
+    window.center();
+  } else {
+    window.bounds = Rect.fromLTWH(
+      (parent['x'] as num).toDouble() +
+          ((parent['width'] as num).toDouble() - width) / 2,
+      (parent['y'] as num).toDouble() + (parentHeight - height) / 2,
+      width,
+      height,
+    );
+  }
 }

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,7 @@ import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/services/desktop_integration.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/models/browsing_preferences.dart';
+import 'package:hizip/models/theme_accent.dart';
 import 'package:hizip/ui/archive_app.dart';
 import 'package:hizip/ui/file_item_surface.dart';
 
@@ -40,6 +42,8 @@ class QuickLookService extends TestService {
 class MacDesktop extends DesktopIntegration {
   @override
   bool get supportsQuickLook => true;
+  @override
+  bool get supportsFileIntegration => true;
 }
 
 class TestDesktop extends DesktopIntegration {
@@ -87,6 +91,107 @@ Future<void> workspace(WidgetTester tester) => tester.pumpWidget(
 );
 
 void main() {
+  testWidgets('light selected file name and lock icon follow accent contrast', (
+    tester,
+  ) async {
+    size(tester, const Size(1200, 700));
+    final settings = AppSettings(writeBrowsing: (_) async {});
+    addTearDown(settings.dispose);
+    await settings.setBrowsing(
+      const BrowsingPreferences(view: 'list', inspector: false),
+    );
+    final doc = ArchiveDocument(
+      '/locked.zip',
+      const [
+        ArchiveEntry(
+          path: 'locked.txt',
+          size: 4,
+          directory: false,
+          encrypted: true,
+        ),
+      ],
+      'ZIP',
+      false,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: desktopTheme(),
+        builder: foruiBuilder,
+        home: ArchiveWorkspace(
+          initialDocument: doc,
+          settings: settings,
+          service: TestService(),
+          desktop: TestDesktop(),
+          enableNativeTransfers: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final cell = find.byKey(const ValueKey('file-locked.txt'));
+    final lock = find.descendant(
+      of: cell,
+      matching: find.byIcon(CupertinoIcons.lock),
+    );
+    final onAccent = Theme.of(tester.element(cell)).colorScheme.onPrimary;
+    expect(tester.widget<Icon>(lock).color, isNot(onAccent));
+    await tester.tap(cell);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Icon>(lock).color, onAccent);
+    final name = find.descendant(of: cell, matching: find.text('locked.txt'));
+    expect(tester.widget<Text>(name).style!.color, onAccent);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('background Hi follows theme accent in $brightness', (
+      tester,
+    ) async {
+      for (final accent in [ThemeAccent.blue, ThemeAccent.rose]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: desktopTheme(brightness: brightness, accent: accent),
+            builder: foruiBuilder,
+            home: ArchiveWorkspace(
+              initialDocument: sample,
+              service: TestService(),
+              desktop: TestDesktop(),
+              enableNativeTransfers: false,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final watermark = tester.widget<Text>(
+          find.byKey(const ValueKey('workspace-watermark')),
+        );
+        final spans = (watermark.textSpan! as TextSpan).children!;
+        expect(watermark.textSpan!.toPlainText(), 'HiZip');
+        expect((spans.first as TextSpan).text, 'Hi');
+        expect(
+          spans.first.style!.color,
+          accent
+              .colorFor(brightness)
+              .withValues(alpha: brightness == Brightness.light ? .8 : .5),
+        );
+        expect((spans.last as TextSpan).text, 'Zip');
+        expect(spans.last.style, isNull);
+        expect(
+          watermark.style!.color,
+          brightness == Brightness.dark
+              ? const Color(0x0dffffff)
+              : const Color(0xffb0b0b0),
+        );
+        if (brightness == Brightness.light) {
+          final gray = watermark.style!.color!;
+          expect(gray.r, gray.g);
+          expect(gray.g, gray.b);
+          expect(gray.computeLuminance(), inExclusiveRange(.4, .6));
+        }
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
   for (final width in [900.0, 1440.0]) {
     testWidgets(
       'grid arrows follow cells and reveal selection at width $width',
@@ -136,7 +241,9 @@ void main() {
           await tester.pumpAndSettle();
         }
 
-        await tester.tap(cell(0));
+        await tester.tap(
+          find.byKey(const ValueKey('grid-icon-background-00.bin')),
+        );
         await arrow(LogicalKeyboardKey.arrowRight);
         selected(1);
         await arrow(LogicalKeyboardKey.arrowDown);
@@ -171,7 +278,9 @@ void main() {
     size(tester, const Size(1440, 900));
     await workspace(tester);
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(FTextField));
+    await tester.tap(find.byTooltip('搜索'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(TextField));
     await tester.pump();
     expect(await tester.sendKeyDownEvent(LogicalKeyboardKey.space), false);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
@@ -183,6 +292,69 @@ void main() {
     );
     await tester.pumpWidget(const SizedBox());
   });
+  for (final width in [1440.0, 440.0]) {
+    testWidgets('search collapses outside and on focus loss at width $width', (
+      tester,
+    ) async {
+      size(tester, Size(width, 900));
+      await workspace(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsOneWidget);
+      await tester.enterText(find.byType(EditableText), 'one');
+      await tester.pump(const Duration(milliseconds: 200));
+      // Wait for the real search isolate before settling fake-time animations.
+      final dynamic workspaceState = tester.state(
+        find.byType(ArchiveWorkspace),
+      );
+      await tester.runAsync(() async {
+        for (
+          var attempt = 0;
+          attempt < 200 && workspaceState.taskQueue.tasks.isNotEmpty;
+          attempt++
+        ) {
+          await tester.pump();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      expect(workspaceState.taskQueue.tasks, isEmpty);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('file-one.txt')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+      expect(find.byKey(const ValueKey('file-two.txt')), findsNothing);
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
+      final input = tester.widget<EditableText>(
+        find.descendant(
+          of: find.byKey(const ValueKey('archive-search')),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(input.controller.text, 'one');
+      expect(input.focusNode.hasFocus, true);
+      input.focusNode.unfocus();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsNothing);
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('clear-archive-search')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('archive-search')), findsOneWidget);
+      expect(input.controller.text, isEmpty);
+      expect(find.byKey(const ValueKey('file-two.txt')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
   testWidgets('file icon cache separates resolutions and reuses nearby sizes', (
     tester,
   ) async {
@@ -268,7 +440,7 @@ void main() {
   ) async {
     size(tester, const Size(1440, 900));
     await tester.pumpWidget(const HiZipApp());
-    expect(find.text('HiZip'), findsOneWidget);
+    expect(find.text('HiZip'), findsWidgets);
     expect(find.text('未打开压缩包'), findsWidgets);
     expect(find.textContaining('整理得更轻'), findsNothing);
     expect(find.text('LESS SIZE. MORE SPACE.'), findsNothing);
@@ -282,7 +454,7 @@ void main() {
   testWidgets('phone directory drawer works without overflow', (tester) async {
     size(tester, const Size(390, 844));
     await tester.pumpWidget(const HiZipApp());
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(const ValueKey('directory-drawer-toggle')));
     await tester.pumpAndSettle();
     expect(find.text('目录'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -304,6 +476,38 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    final menuButton = find.byTooltip('应用菜单');
+    final backButton = find.byTooltip('返回');
+    for (final width in [390.0, 700.0, 1440.0]) {
+      tester.view.physicalSize = Size(width, 900);
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(menuButton).right,
+        lessThanOrEqualTo(tester.getRect(backButton).left),
+      );
+      if (width < 800) {
+        final directoryButton = find.byKey(
+          const ValueKey('directory-drawer-toggle'),
+        );
+        expect(
+          find.descendant(
+            of: directoryButton,
+            matching: find.byIcon(FIcons.folderTree),
+          ),
+          findsOneWidget,
+        );
+      } else {
+        expect(
+          find.byKey(const ValueKey('directory-drawer-toggle')),
+          findsNothing,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+    expect(
+      find.descendant(of: menuButton, matching: find.byIcon(Icons.menu)),
+      findsOneWidget,
+    );
     await tester.tap(find.byTooltip('应用菜单'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('application-menu')), findsOneWidget);
@@ -313,8 +517,8 @@ void main() {
     expect(find.text('设置…'), findsOneWidget);
     await tester.tap(find.text('文件'));
     await tester.pumpAndSettle();
-    expect(find.text('打开…'), findsOneWidget);
-    expect(find.text('创建压缩包'), findsOneWidget);
+    expect(find.text('打开压缩包…'), findsOneWidget);
+    expect(find.text('创建压缩包…'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(
@@ -371,6 +575,8 @@ void main() {
         true,
       );
       // Typing spaces and cursor movement in search must not navigate the list.
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byType(TextField));
       await tester.enterText(find.byType(TextField), 'one');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);

@@ -9,6 +9,37 @@ import 'package:crypto/crypto.dart';
 void main() {
   final enabled = Platform.environment['HIZIP_NATIVE_LIBRARY'] != null;
   test(
+    'ArchiveService opens ZIPs beyond previous entry count limits',
+    () async {
+      final root = await Directory.systemTemp.createTemp('hizip-large-archive-');
+      final service = ArchiveService(temporaryRoot: root.path);
+      try {
+        final source = File(p.join(root.path, 'empty.txt'));
+        await source.writeAsString('');
+        for (final count in [1001, 100001]) {
+          final archive = p.join(root.path, 'archive-$count.zip');
+          final names = List.generate(count, (index) => 'files/$index.txt');
+          await NativeArchive.create(
+            archive,
+            List.filled(count, source.path),
+            names,
+          );
+          final doc = await service.read(archive);
+          expect(doc.writable, true);
+          expect(doc.entries.length, count);
+          expect(doc.entries.last.path, names.last);
+          expect(await service.preview(doc, doc.entries.last), isEmpty);
+        }
+      } finally {
+        await service.dispose();
+        await root.delete(recursive: true);
+      }
+    },
+    skip: enabled
+        ? false
+        : 'Set HIZIP_NATIVE_LIBRARY to the compiled native engine',
+  );
+  test(
     'Dart FFI creates, browses, extracts and rewrites an actual ZIP',
     () async {
       final root = await Directory.systemTemp.createTemp('hizip-ffi-test-');

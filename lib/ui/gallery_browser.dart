@@ -21,13 +21,21 @@ class GalleryBrowser extends StatefulWidget {
     required this.icon,
     required this.item,
     required this.foreground,
+    this.trailing,
+    this.name,
+    this.selectionAreaBuilder,
+    this.revealSelection = true,
   });
   final Object document;
   final bool enabled;
+  final bool revealSelection;
+  final Widget Function(ScrollController, Widget)? selectionAreaBuilder;
   final List<ArchiveEntry> entries;
   final ArchiveEntry? selected;
   final double thumbnailSize;
   final Widget preview;
+  final Widget? trailing;
+  final Widget Function(ArchiveEntry)? name;
   final Future<Uint8List> Function(ArchiveEntry) loadImage;
   final Widget Function(ArchiveEntry, double) icon;
   final Widget Function(ArchiveEntry, Widget) item;
@@ -54,15 +62,17 @@ class _GalleryBrowserState extends State<GalleryBrowser> {
         (!oldWidget.enabled && widget.enabled)) {
       thumbnails.clear();
     }
-    if (oldWidget.selected != widget.selected ||
-        oldWidget.thumbnailSize != widget.thumbnailSize ||
-        !identical(oldWidget.document, widget.document)) {
+    if (widget.revealSelection &&
+        (oldWidget.selected != widget.selected ||
+            oldWidget.thumbnailSize != widget.thumbnailSize ||
+            !identical(oldWidget.document, widget.document) ||
+            !oldWidget.revealSelection)) {
       reveal();
     }
   }
 
   void reveal() => WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted || !scroll.hasClients) return;
+    if (!mounted || !scroll.hasClients || !widget.revealSelection) return;
     final index = widget.entries.indexWhere(
       (entry) => entry.path == widget.selected?.path,
     );
@@ -162,59 +172,72 @@ class _GalleryBrowserState extends State<GalleryBrowser> {
           ),
           SizedBox(
             height: size + 42,
-            child: ListView.builder(
-              key: const ValueKey('gallery-filmstrip'),
-              controller: scroll,
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              itemExtent: widget.thumbnailSize + 24,
-              itemCount: widget.entries.length,
-              itemBuilder: (_, index) {
-                final entry = widget.entries[index];
-                final fallback = widget.icon(entry, size);
-                final image =
-                    widget.enabled && entry.isImage && entry.canExtract
-                    ? FutureBuilder<Uint8List?>(
-                        future: thumbnail(entry),
-                        builder: (_, snapshot) => snapshot.data == null
-                            ? fallback
-                            : Image.memory(
-                                snapshot.data!,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.medium,
-                                errorBuilder: (_, _, _) => fallback,
-                              ),
-                      )
-                    : fallback;
-                return Tooltip(
-                  message: entry.name,
-                  child: widget.item(
-                    entry,
-                    Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Column(
-                        children: [
-                          Expanded(child: Center(child: image)),
-                          const SizedBox(height: 4),
-                          Text(
-                            entry.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: widget.foreground(entry),
-                            ),
-                          ),
-                        ],
+            child: selectionArea(
+              ListView.builder(
+                key: const ValueKey('gallery-filmstrip'),
+                controller: scroll,
+                cacheExtent: 0,
+                addAutomaticKeepAlives: false,
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                itemExtent: widget.thumbnailSize + 24,
+                itemCount:
+                    widget.entries.length + (widget.trailing == null ? 0 : 1),
+                itemBuilder: (_, index) {
+                  if (index == widget.entries.length) return widget.trailing!;
+                  final entry = widget.entries[index];
+                  final fallback = widget.icon(entry, size);
+                  final image =
+                      widget.enabled && entry.isImage && entry.canExtract
+                      ? FutureBuilder<Uint8List?>(
+                          future: thumbnail(entry),
+                          builder: (_, snapshot) => snapshot.data == null
+                              ? fallback
+                              : Image.memory(
+                                  snapshot.data!,
+                                  fit: BoxFit.contain,
+                                  filterQuality: FilterQuality.medium,
+                                  errorBuilder: (_, _, _) => fallback,
+                                ),
+                        )
+                      : fallback;
+                  return Tooltip(
+                    message: entry.name,
+                    child: widget.item(
+                      entry,
+                      Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Column(
+                          children: [
+                            Expanded(child: Center(child: image)),
+                            const SizedBox(height: 4),
+                            widget.name?.call(entry) ??
+                                Text(
+                                  entry.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: widget.foreground(entry),
+                                  ),
+                                ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ],
       );
     },
   );
+
+  Widget selectionArea(Widget child) =>
+      widget.selectionAreaBuilder?.call(scroll, child) ?? child;
 }

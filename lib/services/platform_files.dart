@@ -9,9 +9,11 @@ Future<List<selector.XFile>> openFiles({
 
 Future<selector.FileSaveLocation?> getSaveLocation({
   String? suggestedName,
+  String? initialDirectory,
   List<selector.XTypeGroup> acceptedTypeGroups = const [],
 }) => NativeDocuments.getSaveLocation(
   suggestedName: suggestedName,
+  initialDirectory: initialDirectory,
   acceptedTypeGroups: acceptedTypeGroups,
 );
 

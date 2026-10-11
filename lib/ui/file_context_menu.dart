@@ -1,6 +1,7 @@
 import 'app_localizations.dart';
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -15,15 +16,46 @@ class DesktopMenuAction {
     this.onPressed, {
     this.children,
     this.checked = false,
+    this.enabled = true,
+    this.shortcut,
   });
+  const DesktopMenuAction.separator()
+    : title = '',
+      onPressed = null,
+      children = null,
+      checked = false,
+      enabled = false,
+      shortcut = null;
   final String title;
   final VoidCallback? onPressed;
   final List<DesktopMenuAction>? children;
   final bool checked;
+  final bool enabled;
+  final String? shortcut;
+  bool get separator => title.isEmpty && children == null;
+}
+
+/// Forui applies its offset after overflow correction. Include the pointer
+/// offset in the placement calculation so the final menu stays inside the view.
+class _ContextMenuOverflow implements FPortalOverflow {
+  const _ContextMenuOverflow(this.offset);
+  final Offset offset;
+
+  @override
+  Offset call(Size view, FPortalChildRect child, FPortalRect portal) =>
+      FPortalOverflow.slide(view, child, (
+        offset: portal.offset + offset,
+        size: portal.size,
+        anchor: portal.anchor,
+      ));
 }
 
 /// Forui menus retain desktop keyboard navigation and nested app choices.
 class FileContextMenu extends StatefulWidget {
+  static FocusNode? get commandFocus =>
+      _FileContextMenuState.opened?.previousFocus ??
+      FocusManager.instance.primaryFocus;
+
   const FileContextMenu({
     super.key,
     required this.child,
@@ -31,11 +63,16 @@ class FileContextMenu extends StatefulWidget {
     this.triggerBuilder,
     this.onSelect,
     this.onOpen,
+    this.onOpenInHiZip,
     this.onPreview,
+    this.onProperties,
     this.onCopy,
     this.onPaste,
     this.onExtract,
+    this.onExtractAll,
+    this.onExtractAllNamed,
     this.onDelete,
+    this.onRename,
     this.onNewFolder,
     this.onNewDocument,
     this.applications,
@@ -59,11 +96,16 @@ class FileContextMenu extends StatefulWidget {
   final bool enabled, applicationOnly, primaryClick, openUpwards;
   final VoidCallback? onSelect,
       onOpen,
+      onOpenInHiZip,
       onPreview,
+      onProperties,
       onCopy,
       onPaste,
       onExtract,
+      onExtractAll,
+      onExtractAllNamed,
       onDelete,
+      onRename,
       onNewFolder,
       onNewDocument,
       onChooseApplication;
@@ -226,7 +268,7 @@ class _FileContextMenuState extends State<FileContextMenu>
                   children: [
                     const Icon(Icons.open_with, size: 16),
                     const SizedBox(width: 6),
-                    Text(widget.touchDragLabel ?? '拖动'),
+                    Text(widget.touchDragLabel ?? appText(context, '拖动')),
                   ],
                 ),
               ),
@@ -248,6 +290,8 @@ class _FileContextMenuState extends State<FileContextMenu>
 
   void invoke(VoidCallback? action) {
     close();
+    // Restore the target before commands inspect whether they act on text or files.
+    FocusManager.instance.applyFocusChangesIfNeeded();
     action?.call();
   }
 
@@ -297,11 +341,48 @@ class _FileContextMenuState extends State<FileContextMenu>
         ? null
         : AppText(
             shortcut,
-            style: const TextStyle(fontSize: 11, color: Color(0xff8b8b8b)),
+            style: TextStyle(
+              fontSize: 11,
+              color: context.theme.colors.mutedForeground,
+            ),
           ),
     onPress: action == null ? null : () => invoke(action),
   );
-  List<FItemGroupMixin> appItems() => [
+
+  Size get menuViewport {
+    final media = MediaQuery.of(context);
+    final view = View.of(context);
+    final padding = EdgeInsets.fromViewPadding(
+      view.viewPadding,
+      view.devicePixelRatio,
+    );
+    final insets = media.viewInsets;
+    return Size(
+      math.max(
+        1,
+        media.size.width -
+            math.max(padding.left, insets.left) -
+            math.max(padding.right, insets.right) -
+            16,
+      ),
+      math.max(
+        1,
+        media.size.height -
+            math.max(padding.top, insets.top) -
+            math.max(padding.bottom, insets.bottom) -
+            16,
+      ),
+    );
+  }
+
+  FPopoverMenuStyleDelta get boundedMenuStyle => FPopoverMenuStyleDelta.delta(
+    minWidth: math.min(220, menuViewport.width),
+    maxWidth: math.min(260, menuViewport.width),
+    popoverPadding: const EdgeInsetsGeometryDelta.value(EdgeInsets.all(8)),
+    motion: FPopoverMotion.none,
+  );
+
+  List<FItemGroupMixin> externalAppItems() => [
     FItemGroup(
       children: [
         if (apps == null) item('正在读取应用…', null),
@@ -315,31 +396,65 @@ class _FileContextMenuState extends State<FileContextMenu>
           ),
       ],
     ),
-    FItemGroup(children: [item('其他…', widget.onChooseApplication)]),
+    if (widget.onChooseApplication != null)
+      FItemGroup(children: [item('其他…', widget.onChooseApplication)]),
   ];
+  List<FItemGroupMixin> appItems() => widget.onOpenInHiZip == null
+      ? externalAppItems()
+      : [
+          FItemGroup(
+            children: [
+              item(
+                '在 HiZip 中打开',
+                widget.onOpenInHiZip,
+                icon: const Icon(Icons.archive_outlined, size: 16),
+              ),
+              if (widget.applications != null ||
+                  widget.onChooseApplication != null)
+                FSubmenuItem(
+                  title: const AppText('其他应用'),
+                  submenu: externalAppItems(),
+                  submenuStyle: boundedMenuStyle,
+                  submenuMaxHeight: menuViewport.height,
+                  submenuIntrinsicWidth: false,
+                ),
+            ],
+          ),
+        ];
   FItemMixin actionItem(DesktopMenuAction action) => action.children == null
       ? item(
           action.title,
           action.onPressed,
+          shortcut: action.shortcut,
           icon: action.checked ? const Icon(Icons.check, size: 14) : null,
         )
       : FSubmenuItem(
           title: AppText(action.title),
-          submenu: [
-            FItemGroup(children: action.children!.map(actionItem).toList()),
-          ],
-          submenuStyle: const FPopoverMenuStyleDelta.delta(
-            motion: FPopoverMotion.none,
-          ),
+          enabled: action.enabled,
+          submenu: actionGroups(action.children!),
+          submenuStyle: boundedMenuStyle,
+          submenuMaxHeight: menuViewport.height,
+          submenuIntrinsicWidth: false,
         );
+
+  List<FItemGroupMixin> actionGroups(List<DesktopMenuAction> actions) {
+    final groups = <FItemGroupMixin>[];
+    var items = <FItemMixin>[];
+    for (final action in actions) {
+      if (action.separator) {
+        if (items.isNotEmpty) groups.add(FItemGroup(children: items));
+        items = [];
+      } else {
+        items.add(actionItem(action));
+      }
+    }
+    if (items.isNotEmpty) groups.add(FItemGroup(children: items));
+    return groups;
+  }
 
   List<FItemGroupMixin> menu() {
     if (widget.actions != null) {
-      return [
-        FItemGroup(
-          children: [for (final action in widget.actions!) actionItem(action)],
-        ),
-      ];
+      return actionGroups(widget.actions!);
     }
     if (widget.applicationOnly) {
       return appItems();
@@ -347,17 +462,18 @@ class _FileContextMenuState extends State<FileContextMenu>
     return [
       if (widget.onOpen != null ||
           widget.onPreview != null ||
+          widget.onOpenInHiZip != null ||
           widget.onOpenWith != null)
         FItemGroup(
           children: [
             if (widget.onOpen != null) item('打开', widget.onOpen),
-            if (widget.onOpenWith != null)
+            if (widget.onOpenInHiZip != null || widget.onOpenWith != null)
               FSubmenuItem(
                 title: const AppText('打开方式'),
                 submenu: appItems(),
-                submenuStyle: const FPopoverMenuStyleDelta.delta(
-                  motion: FPopoverMotion.none,
-                ),
+                submenuStyle: boundedMenuStyle,
+                submenuMaxHeight: menuViewport.height,
+                submenuIntrinsicWidth: false,
               ),
             if (widget.onPreview != null)
               item('快速查看', widget.onPreview, shortcut: '空格'),
@@ -372,6 +488,14 @@ class _FileContextMenuState extends State<FileContextMenu>
       ),
       if (widget.onExtract != null)
         FItemGroup(children: [item('解压所选', widget.onExtract)]),
+      if (widget.onExtractAll != null || widget.onExtractAllNamed != null)
+        FItemGroup(
+          children: [
+            if (widget.onExtractAll != null) item('解压全部…', widget.onExtractAll),
+            if (widget.onExtractAllNamed != null)
+              item('解压全部到同名文件夹…', widget.onExtractAllNamed),
+          ],
+        ),
       if (widget.onNewFolder != null || widget.onNewDocument != null)
         FItemGroup(
           children: [
@@ -380,8 +504,16 @@ class _FileContextMenuState extends State<FileContextMenu>
               item('新建空白文档…', widget.onNewDocument),
           ],
         ),
+      if (widget.onRename != null)
+        FItemGroup(
+          children: [
+            if (widget.onRename != null) item('重命名…', widget.onRename),
+          ],
+        ),
       if (widget.onDelete != null)
         FItemGroup(children: [item('删除…', widget.onDelete)]),
+      if (widget.onProperties != null)
+        FItemGroup(children: [item('属性', widget.onProperties)]),
     ];
   }
 
@@ -397,21 +529,16 @@ class _FileContextMenuState extends State<FileContextMenu>
     autofocus: true,
     focusNode: menuFocus,
     intrinsicWidth: false,
-    maxHeight: MediaQuery.sizeOf(context).height - 16,
+    maxHeight: menuViewport.height,
     menuAnchor: widget.openUpwards ? Alignment.bottomRight : Alignment.topLeft,
     childAnchor: widget.openUpwards ? Alignment.topRight : Alignment.topLeft,
-    offset: offset,
     spacing: const FPortalSpacing.spacing(0),
-    overflow: FPortalOverflow.slide,
-    hideRegion: widget.primaryClick
-        ? FPopoverHideRegion.excludeChild
-        : FPopoverHideRegion.anywhere,
+    overflow: _ContextMenuOverflow(offset),
+    // Share Forui's tap region with nested menus so interacting with a submenu
+    // does not dismiss its parent. Clicks on the context target still close it.
+    hideRegion: FPopoverHideRegion.excludeChild,
     onTapHide: close,
-    style: const FPopoverMenuStyleDelta.delta(
-      minWidth: 220,
-      maxWidth: 260,
-      motion: FPopoverMotion.none,
-    ),
+    style: boundedMenuStyle,
     child: Shortcuts(
       shortcuts: {
         const SingleActivator(LogicalKeyboardKey.escape): const DismissIntent(),
@@ -444,7 +571,14 @@ class _FileContextMenuState extends State<FileContextMenu>
               : null,
           child: Listener(
             behavior: HitTestBehavior.translucent,
-            onPointerDown: touchDown,
+            onPointerDown: (event) {
+              if (!widget.primaryClick &&
+                  menuShown &&
+                  event.buttons == kPrimaryMouseButton) {
+                close();
+              }
+              touchDown(event);
+            },
             onPointerMove: touchMove,
             onPointerUp: touchUp,
             onPointerCancel: touchCancel,

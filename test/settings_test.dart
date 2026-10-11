@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/models/selection_highlight.dart';
+import 'package:hizip/models/theme_accent.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/ui/archive_app.dart';
 import 'package:hizip/ui/desktop_widgets.dart';
@@ -19,13 +20,17 @@ void main() {
       readTheme: () async => null,
       writeTheme: (_) async {},
       writeHighlight: (_) async {},
+      writeAccent: (_) async {},
     );
     await tester.pumpWidget(
       ListenableBuilder(
         listenable: settings,
         builder: (_, _) => MaterialApp(
-          theme: desktopTheme(),
-          darkTheme: desktopTheme(brightness: Brightness.dark),
+          theme: desktopTheme(accent: settings.accent),
+          darkTheme: desktopTheme(
+            brightness: Brightness.dark,
+            accent: settings.accent,
+          ),
           themeMode: settings.themeMode,
           builder: foruiBuilder,
           home: SettingsPage(
@@ -53,9 +58,16 @@ void main() {
       Theme.of(tester.element(find.byType(SettingsPage))).brightness,
       Brightness.dark,
     );
-    await tester.tap(find.text('淡灰色'));
+    expect(find.text('文件选择高亮'), findsNothing);
+    expect(find.text('淡灰色'), findsNothing);
+    await tester.ensureVisible(find.text('紫色'));
+    await tester.tap(find.text('紫色'));
     await tester.pumpAndSettle();
-    expect(settings.selectionHighlight, SelectionHighlight.neutral);
+    expect(settings.accent, ThemeAccent.purple);
+    expect(
+      Theme.of(tester.element(find.byType(SettingsPage))).colorScheme.primary,
+      ThemeAccent.purple.color,
+    );
     expect(find.byTooltip('返回'), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     expect(closed, true);
@@ -79,7 +91,7 @@ void main() {
       await first.setSelectionHighlight(SelectionHighlight.neutral);
       final second = create();
       await second.load();
-      expect(second.selectionHighlight, SelectionHighlight.neutral);
+      expect(second.selectionHighlight, SelectionHighlight.blue);
       await second.setSelectionHighlight(SelectionHighlight.blue);
       await first.load();
       expect(first.selectionHighlight, SelectionHighlight.blue);

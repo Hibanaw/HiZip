@@ -1,14 +1,16 @@
 import '../models/app_language.dart';
+import '../models/auxiliary_window_mode.dart';
 import 'app_localizations.dart';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:nativeapi/nativeapi.dart' show NativePlatform;
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 
 import '../services/app_settings.dart';
 import '../services/desktop_integration.dart';
-import '../models/selection_highlight.dart';
+import '../models/theme_accent.dart';
 import '../models/archive_preferences.dart';
 import 'desktop_widgets.dart';
 import 'window_chrome.dart';
@@ -40,7 +42,7 @@ class _SettingsPageState extends State<SettingsPage>
   void updateWindowTitle() {
     if (widget.systemFrame) {
       setAuxiliaryWindowTitle(
-        'HiZip · ${settings.locale.languageCode == "en" ? "Settings" : "设置"}',
+        'HiZip · ${translateAppText('设置', settings.locale.languageCode)}',
       );
     }
   }
@@ -100,6 +102,10 @@ class _SettingsPageState extends State<SettingsPage>
       ),
     ],
   );
+  String get systemLanguageCode => resolveAppLocale(
+    WidgetsBinding.instance.platformDispatcher.locale,
+  ).languageCode;
+
   AppSettings get settings => widget.settings;
   VoidCallback? get onClose => widget.onClose;
   @override
@@ -123,11 +129,9 @@ class _SettingsPageState extends State<SettingsPage>
                 height: windowChromeHeight(),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+                  color: context.theme.colors.muted,
                   border: Border(
-                    bottom: BorderSide(
-                      color: desktopColor(context, 0xffdadada, 0xff414248),
-                    ),
+                    bottom: BorderSide(color: context.theme.colors.border),
                   ),
                 ),
                 child: Row(
@@ -161,7 +165,8 @@ class _SettingsPageState extends State<SettingsPage>
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final sidebarWidth = settings.locale.languageCode == 'en'
+                  final sidebarWidth =
+                      !['zh', 'ja', 'ko'].contains(settings.locale.languageCode)
                       ? (constraints.maxWidth < 500 ? 152.0 : 170.0)
                       : (constraints.maxWidth < 500 ? 116.0 : 150.0);
                   final content = ListenableBuilder(
@@ -171,7 +176,13 @@ class _SettingsPageState extends State<SettingsPage>
                       child: Align(
                         alignment: Alignment.topLeft,
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 560),
+                          constraints: BoxConstraints(
+                            minWidth: (constraints.maxWidth - 40).clamp(
+                              0.0,
+                              560.0,
+                            ),
+                            maxWidth: 560,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -191,15 +202,21 @@ class _SettingsPageState extends State<SettingsPage>
                                     for (final mode in ThemeMode.values)
                                       DesktopButton(
                                         active: settings.themeMode == mode,
-                                        primary: settings.themeMode == mode,
                                         onPressed: settings.saving
                                             ? null
                                             : () => settings.setThemeMode(mode),
-                                        child: AppText(switch (mode) {
-                                          ThemeMode.system => '跟随系统',
-                                          ThemeMode.light => '浅色',
-                                          ThemeMode.dark => '深色',
-                                        }),
+                                        child: mode == ThemeMode.system
+                                            ? Text(
+                                                translateAppText(
+                                                  '跟随系统',
+                                                  systemLanguageCode,
+                                                ),
+                                              )
+                                            : AppText(
+                                                mode == ThemeMode.light
+                                                    ? '浅色'
+                                                    : '深色',
+                                              ),
                                       ),
                                   ],
                                 ),
@@ -212,24 +229,19 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final value in AppLanguage.values)
-                                      DesktopButton(
-                                        active: settings.language == value,
-                                        onPressed: settings.saving
-                                            ? null
-                                            : () => settings.setLanguage(value),
-                                        child: AppText(switch (value) {
-                                          AppLanguage.system => '跟随系统',
-                                          AppLanguage.simplifiedChinese =>
-                                            '简体中文',
-                                          AppLanguage.english => 'English',
-                                        }),
-                                      ),
-                                  ],
+                                AppLanguageScope(
+                                  languageCode: systemLanguageCode,
+                                  child: DesktopSelect<AppLanguage>(
+                                    key: const ValueKey('language-select'),
+                                    value: settings.language,
+                                    items: {
+                                      for (final value in AppLanguage.values)
+                                        value.label: value,
+                                    },
+                                    onChanged: settings.saving
+                                        ? null
+                                        : settings.setLanguage,
+                                  ),
                                 ),
                                 const SizedBox(height: 8),
                                 const AppText(
@@ -238,7 +250,7 @@ class _SettingsPageState extends State<SettingsPage>
                                 ),
                                 const SizedBox(height: 24),
                                 const AppText(
-                                  '文件选择高亮',
+                                  '主题色',
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -249,27 +261,45 @@ class _SettingsPageState extends State<SettingsPage>
                                   spacing: 8,
                                   runSpacing: 8,
                                   children: [
-                                    for (final value
-                                        in SelectionHighlight.values)
+                                    for (final value in ThemeAccent.values)
                                       DesktopButton(
-                                        active:
-                                            settings.selectionHighlight ==
-                                            value,
+                                        active: settings.accent == value,
                                         onPressed: settings.saving
                                             ? null
-                                            : () => settings
-                                                  .setSelectionHighlight(value),
-                                        child: AppText(
-                                          value == SelectionHighlight.blue
-                                              ? '蓝色'
-                                              : '淡灰色',
+                                            : () => settings.setAccent(value),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (settings.accent == value)
+                                              const Icon(
+                                                CupertinoIcons.check_mark,
+                                                size: 14,
+                                              )
+                                            else
+                                              DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: value.colorFor(
+                                                    Theme.of(
+                                                      context,
+                                                    ).brightness,
+                                                  ),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const SizedBox(
+                                                  width: 14,
+                                                  height: 14,
+                                                ),
+                                              ),
+                                            const SizedBox(width: 6),
+                                            AppText(value.label),
+                                          ],
                                         ),
                                       ),
                                   ],
                                 ),
                                 const SizedBox(height: 12),
                                 AppText(
-                                  '多栏视图仅最右侧列使用此高亮，左侧路径列使用灰色。',
+                                  '主题色用于主要按钮、文件选择和交互高亮，立即生效。',
                                   style: TextStyle(
                                     fontSize: 12,
                                     height: 1.6,
@@ -277,7 +307,7 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 24),
-                                Row(
+                                Wrap(
                                   children: [
                                     const AppText(
                                       '界面 DPI',
@@ -308,6 +338,33 @@ class _SettingsPageState extends State<SettingsPage>
                                   '调整界面文字大小，重启应用后仍会保留。',
                                   style: TextStyle(fontSize: 12, height: 1.6),
                                 ),
+                                if (settings.supportsSeparateWindows) ...[
+                                  const SizedBox(height: 24),
+                                  const AppText(
+                                    '辅助窗口显示方式',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  DesktopSelect<AuxiliaryWindowMode>(
+                                    key: const ValueKey('window-mode-select'),
+                                    value: settings.windowMode,
+                                    items: const {
+                                      '画面内显示': AuxiliaryWindowMode.inline,
+                                      '独立窗口显示': AuxiliaryWindowMode.separate,
+                                    },
+                                    onChanged: settings.saving
+                                        ? null
+                                        : settings.setWindowMode,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  const AppText(
+                                    '控制设置、属性和对话框的显示位置。任务进度和结果始终显示在下方状态栏。紧凑布局下对话框全屏显示。',
+                                    style: TextStyle(fontSize: 12, height: 1.6),
+                                  ),
+                                ],
                               ],
                               if (section == 'archive') ...[
                                 const AppText(
@@ -386,48 +443,76 @@ class _SettingsPageState extends State<SettingsPage>
                                   ),
                                 ),
                                 const SizedBox(height: 10),
-                                const AppText(
-                                  '可在 Finder 的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
+                                AppText(
+                                  NativePlatform.isHarmonyOS
+                                      ? '请在系统文件的“打开方式”中选择 HiZip，并由系统管理默认应用。'
+                                      : '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
                                   style: TextStyle(fontSize: 12, height: 1.6),
                                 ),
                                 const SizedBox(height: 16),
-                                DesktopButton(
-                                  onPressed:
-                                      associating ||
-                                          !DesktopIntegration()
-                                              .supportsQuickLook
-                                      ? null
-                                      : () async {
-                                          setState(() {
-                                            associating = true;
-                                            associationResult = null;
-                                          });
-                                          try {
-                                            await DesktopIntegration()
-                                                .setDefaultArchiveHandler();
-                                            if (mounted) {
-                                              setState(
-                                                () => associationResult =
-                                                    '已设为默认打开方式',
-                                              );
+                                if (!NativePlatform.isHarmonyOS)
+                                  DesktopButton(
+                                    onPressed:
+                                        associating ||
+                                            !DesktopIntegration()
+                                                .supportsDefaultApplication
+                                        ? null
+                                        : () async {
+                                            setState(() {
+                                              associating = true;
+                                              associationResult = null;
+                                            });
+                                            try {
+                                              await DesktopIntegration()
+                                                  .setDefaultArchiveHandler();
+                                              if (mounted) {
+                                                setState(
+                                                  () => associationResult =
+                                                      '已设为默认打开方式',
+                                                );
+                                              }
+                                            } catch (error) {
+                                              if (mounted) {
+                                                setState(
+                                                  () => associationResult =
+                                                      '设置失败：$error',
+                                                );
+                                              }
+                                            } finally {
+                                              if (mounted) {
+                                                setState(
+                                                  () => associating = false,
+                                                );
+                                              }
                                             }
-                                          } catch (error) {
-                                            if (mounted) {
-                                              setState(
-                                                () => associationResult =
-                                                    '设置失败：$error',
-                                              );
-                                            }
-                                          } finally {
-                                            if (mounted) {
-                                              setState(
-                                                () => associating = false,
-                                              );
-                                            }
-                                          }
-                                        },
-                                  child: const AppText('设为默认打开方式'),
-                                ),
+                                          },
+                                    child: const AppText('设为默认打开方式'),
+                                  ),
+                                if (DesktopIntegration().supportsQuickLook) ...[
+                                  const SizedBox(height: 24),
+                                  const AppText('Finder 右键菜单'),
+                                  const SizedBox(height: 10),
+                                  const AppText(
+                                    '启用 HiZip Finder 扩展后，可在文件右键菜单中创建压缩包或快速创建 ZIP。',
+                                  ),
+                                  const SizedBox(height: 12),
+                                  DesktopButton(
+                                    onPressed: () async {
+                                      try {
+                                        await DesktopIntegration()
+                                            .showFinderExtensionSettings();
+                                      } catch (error) {
+                                        if (mounted) {
+                                          setState(
+                                            () => associationResult =
+                                                '设置失败：$error',
+                                          );
+                                        }
+                                      }
+                                    },
+                                    child: const AppText('管理 Finder 扩展'),
+                                  ),
+                                ],
                                 if (associationResult != null)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 12),
@@ -462,8 +547,6 @@ class _SettingsPageState extends State<SettingsPage>
                                       DesktopButton(
                                         active:
                                             settings.extractionWorkers == value,
-                                        primary:
-                                            settings.extractionWorkers == value,
                                         onPressed: settings.saving
                                             ? null
                                             : () => settings
@@ -497,9 +580,9 @@ class _SettingsPageState extends State<SettingsPage>
                                 const SizedBox(height: 16),
                                 AppText(
                                   settings.error!,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xffb44444),
+                                    color: Theme.of(context).colorScheme.error,
                                   ),
                                 ),
                               ],
@@ -515,14 +598,10 @@ class _SettingsPageState extends State<SettingsPage>
                       Container(
                         width: sidebarWidth,
                         decoration: BoxDecoration(
-                          color: desktopColor(context, 0xfff6f6f6, 0xff292a2e),
+                          color: context.theme.colors.muted,
                           border: Border(
                             right: BorderSide(
-                              color: desktopColor(
-                                context,
-                                0xffdadada,
-                                0xff414248,
-                              ),
+                              color: context.theme.colors.border,
                             ),
                           ),
                         ),

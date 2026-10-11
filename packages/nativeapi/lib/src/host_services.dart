@@ -59,6 +59,25 @@ abstract final class NativePaths {
 
 /// Pickers return sandbox copies on HarmonyOS. Export explicitly after edits.
 abstract final class NativeDocuments {
+  static void listenForOpenFiles(Future<void> Function(List<String>)? receive) {
+    if (!NativePlatform.isHarmonyOS) return;
+    Future<void> drain() async {
+      final paths = await NativePlatform.channel.invokeListMethod<String>(
+        'pendingOpenFiles',
+      );
+      if (paths != null && paths.isNotEmpty) await receive?.call(paths);
+    }
+
+    NativePlatform.channel.setMethodCallHandler(
+      receive == null
+          ? null
+          : (call) async {
+              if (call.method == 'openFilesChanged') await drain();
+            },
+    );
+    if (receive != null) drain();
+  }
+
   static Future<files.XFile?> openFile({
     List<files.XTypeGroup> acceptedTypeGroups = const [],
   }) async {
@@ -79,6 +98,14 @@ abstract final class NativeDocuments {
       ? NativePlatform.channel.invokeMethod<String>('openDirectory')
       : files.getDirectoryPath();
 
+  static Future<List<String>> openContents() async {
+    NativePlatform._requireHarmonyOS();
+    return (await NativePlatform.channel.invokeListMethod<String>(
+          'openContents',
+        )) ??
+        [];
+  }
+
   static Future<List<files.XFile>> openFiles({
     List<files.XTypeGroup> acceptedTypeGroups = const [],
   }) async {
@@ -96,11 +123,13 @@ abstract final class NativeDocuments {
 
   static Future<files.FileSaveLocation?> getSaveLocation({
     String? suggestedName,
+    String? initialDirectory,
     List<files.XTypeGroup> acceptedTypeGroups = const [],
   }) async {
     if (!NativePlatform.isHarmonyOS) {
       return files.getSaveLocation(
         suggestedName: suggestedName,
+        initialDirectory: initialDirectory,
         acceptedTypeGroups: acceptedTypeGroups,
       );
     }
@@ -120,6 +149,13 @@ abstract final class NativeDocuments {
     }
     return NativePlatform.channel.invokeMethod<String>('directoryLocation');
   }
+
+  static Future<bool> hasSaveLocation(String path) async =>
+      !NativePlatform.isHarmonyOS ||
+      (await NativePlatform.channel.invokeMethod<bool>('hasSaveLocation', {
+            'path': path,
+          }) ??
+          false);
 
   static Future<void> finishSave(String path) => NativePlatform.isHarmonyOS
       ? NativePlatform.channel.invokeMethod<void>('finishSave', {'path': path})

@@ -3,7 +3,7 @@
     "name": "nativeapi",
     "type": "har",
     "deviceTypes": [
-      "2in1"
+      "2in1", "tablet", "phone"
     ]
   }
 }
