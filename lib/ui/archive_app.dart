@@ -1460,6 +1460,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             desktop.selectCompressionContents(foldersOnly: foldersOnly),
         suggestOutputPath: availableFinderArchivePath,
         selectOutputPath: selectArchiveOutputPath,
+        formatDisplayPath: NativeDocuments.displayPath,
         onSelectionConfirmed: (paths, path) {
           files = paths;
           output = path;
@@ -1471,16 +1472,25 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     var target = output!;
     String? volumeRoot;
     if (HarmonyBridge.supported && options.volumeSize > 0) {
-      volumeRoot = await getDirectoryPath();
+      final parent = p.dirname(target);
+      volumeRoot = await NativeDocuments.hasDirectoryLocation(parent)
+          ? parent
+          : await getDirectoryPath();
       if (volumeRoot == null || !mounted || closing) return;
       target = p.join(volumeRoot, p.basename(target));
     }
     if (HarmonyBridge.supported &&
         volumeRoot == null &&
         !await NativeDocuments.hasSaveLocation(target)) {
-      final location = await getSaveLocation(suggestedName: p.basename(target));
-      if (location == null || !mounted || closing) return;
-      target = location.path;
+      final parent = p.dirname(target);
+      final selected = await NativeDocuments.hasDirectoryLocation(parent)
+          ? await NativeDocuments.directorySaveLocation(
+              parent,
+              p.basename(target),
+            )
+          : await selectArchiveOutputPath(target, options.format);
+      if (selected == null || !mounted || closing) return;
+      target = selected;
     }
     if (!await desktop.authorizeFileAccess(
           readPaths: files,
@@ -4230,7 +4240,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         behavior: HitTestBehavior.opaque,
                         onTap: busy ? null : () => switchTab(tab),
                         child: Tooltip(
-                          message: tab.document.path,
+                          message: NativeDocuments.displayPath(
+                            tab.document.path,
+                          ),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             child: Row(
@@ -6191,7 +6203,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             '${propertyWindowData?['currentCount'] ?? entries.length} 个',
           ),
           info('大小', formatSize(totalSize)),
-          info('路径', archive ? document!.path : summaryFolder, literal: true),
+          info(
+            '路径',
+            archive
+                ? NativeDocuments.displayPath(document!.path)
+                : summaryFolder,
+            literal: true,
+          ),
           if (archive) info('状态', document!.writable ? '可写入' : '只读'),
           if (archive && document!.supportsComment)
             archiveCommentInformation(inProperties: inProperties),

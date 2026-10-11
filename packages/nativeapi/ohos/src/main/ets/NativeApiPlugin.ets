@@ -11,12 +11,15 @@ import {
 import { WindowInsets } from './WindowInsets';
 import { HostWindow } from './HostWindow';
 import { SystemFiles } from './SystemFiles';
+import { DocumentStore, DocumentLocation } from './DocumentStore';
 
-// Public document URIs stay here. C/FFI and Dart receive private local paths only.
+// UI selections include their system URI; C/FFI only receives private working paths.
 export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, MethodCallHandler, NewWantListener {
   private binding: AbilityPluginBinding | null = null;
-  private pendingUris: string[] = [];
+  private pendingUris: Want[] = [];
+  private documents: DocumentStore = new DocumentStore(() => this.workspace());
   private saves: Map<string, string> = new Map();
+  private freshSaves: Set<string> = new Set();
   private directories: Map<string, string> = new Map();
   private channel: MethodChannel | null = null;
   private insets: WindowInsets | null = null;
@@ -50,7 +53,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.insets = null;
     this.channel?.setMethodCallHandler(null);
     this.channel = null;
+    this.documents.clear();
     this.saves.clear();
+    this.freshSaves.clear();
     this.directories.clear();
   }
   onAttachedToAbility(binding: AbilityPluginBinding): void {
@@ -67,7 +72,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     this.hostWindow?.detach();
     this.insets?.detach();
     this.abilityContext = null;
+    this.documents.clear();
     this.saves.clear();
+    this.freshSaves.clear();
     this.directories.clear();
   }
   onNewWant(want: Want, _launchParams: AbilityConstant.LaunchParam): void {
@@ -76,7 +83,7 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   }
   private receiveWant(want: Want): void {
     if (want.action === 'ohos.want.action.viewData' && want.uri?.startsWith('file://')) {
-      this.pendingUris.push(want.uri);
+      this.pendingUris.push(want);
     }
   }
 
@@ -160,6 +167,22 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     return dir;
   }
 
+  private async directoryWritable(uri: string): Promise<boolean> {
+    try { return await fs.access(new fileUri.FileUri(uri).path, fs.AccessModeType.WRITE); }
+    catch (_) { return false; }
+  }
+
+  private async authorizeDirectory(uri: string): Promise<boolean> {
+    if (await this.directoryWritable(uri)) return true;
+    if (deviceInfo.deviceType !== '2in1') return false;
+    const options = new picker.DocumentSelectOptions();
+    options.defaultFilePathUri = uri;
+    options.selectMode = picker.DocumentSelectMode.FOLDER;
+    options.authMode = true;
+    await new picker.DocumentViewPicker(this.context).select(options);
+    return this.directoryWritable(uri);
+  }
+
   private dimension(call: MethodCall, key: string): number | null {
     const value = call.argument(key) as number | null;
     if (value === null || value === undefined) return null;
@@ -180,10 +203,23 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
   private async copy(source: string, destination: string): Promise<void> {
     const input = await fs.open(source, fs.OpenMode.READ_ONLY);
     try {
-      const output = await fs.open(destination, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      try { await fs.copyFile(input.fd, output.fd); }
+      const targetPath = destination.startsWith('file://') ? new fileUri.FileUri(destination).path : destination;
+      const output = await fs.open(targetPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try { await fs.copyFile(input.fd, output.fd); await fs.fsync(output.fd); }
       finally { await fs.close(output); }
     } finally { await fs.close(input); }
+  }
+
+  private async publishEntry(source: string, directoryUri: string): Promise<void> {
+    const target = directoryUri + '/' + encodeURIComponent(this.name(source));
+    if (await fs.access(new fileUri.FileUri(target).path)) throw new Error('An exported entry already exists.');
+    const stat = await fs.lstat(source);
+    if (stat.isDirectory()) {
+      // fs.copy(directory, existingDirectory) creates source.basename below it.
+      await fs.copy(fileUri.getUriFromPath(source), directoryUri);
+    } else if (stat.isFile()) {
+      await this.copy(source, target);
+    } else { throw new Error('Only regular files and directories can be exported.'); }
   }
 
   private async validateTree(source: string): Promise<void> {
@@ -210,16 +246,33 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
     switch (call.method) {
       case 'windowInsets':
         result.success(await this.insets?.current()); return;
+      case 'documentLocation': {
+        const path = call.argument('path') as string;
+        const saved = this.saves.get(path) ?? this.directories.get(path);
+        result.success(this.documents.getLocation(path) ?? (saved ? this.documents.location(path, saved, true) : null));
+        return;
+      }
+      case 'importDocument': {
+        result.success(await this.documents.importFile(call.argument('uri') as string, call.argument('readOnly') === true));
+        return;
+      }
+      case 'prepareDocumentWrite':
+        await this.documents.prepareWrite(this.localPath(call)); result.success(null); return;
+      case 'finishDocumentWrite': {
+        const path = this.localPath(call);
+        await this.validateExportPath(path);
+        await this.documents.finishWrite(path); result.success(null); return;
+      }
+      case 'abortDocumentWrite':
+        await this.documents.abortWrite(this.localPath(call)); result.success(null); return;
       case 'pendingOpenFiles': {
-        const paths: string[] = [];
+        const locations: DocumentLocation[] = [];
         while (this.pendingUris.length > 0) {
-          const uri = this.pendingUris[0];
-          const path = await this.workspace() + '/' + this.name(uri);
-          await this.copy(uri, path);
-          paths.push(path);
+          const want = this.pendingUris[0];
+          locations.push(await this.documents.importFile(want.uri!));
           this.pendingUris.shift();
         }
-        result.success(paths);
+        result.success(locations);
         return;
       }
       case 'hostInfo': {
@@ -338,17 +391,17 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         const filters = this.suffixFilters(call);
         if (filters.length > 0) options.fileSuffixFilters = filters;
         const uris = await new picker.DocumentViewPicker(this.context).select(options);
-        const paths: string[] = [];
+        const paths: DocumentLocation[] = [];
         for (const uri of uris) {
           // Separate roots retain original names, including same-named documents.
-          const path = await this.workspace() + '/' + this.name(uri);
-          if (call.method === 'openContents' && (await fs.stat(uri)).isDirectory()) {
-            await fs.copy(uri, fileUri.getUriFromPath(path));
+          if (call.method === 'openContents' && (await fs.stat(new fileUri.FileUri(uri).path)).isDirectory()) {
+            const path = await this.workspace() + '/' + this.name(uri);
+            await fs.copy(uri, fileUri.getUriFromPath(path.substring(0, path.lastIndexOf('/'))));
             await this.validateTree(path);
+            paths.push(this.documents.location(path, uri, false));
           } else {
-            await this.copy(uri, path);
+            paths.push(await this.documents.importFile(uri));
           }
-          paths.push(path);
         }
         result.success(call.method === 'openFile' ? (paths.length === 0 ? null : paths[0]) : paths);
         return;
@@ -362,9 +415,9 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         const root = await this.workspace();
         const path = root + '/' + this.name(uris[0]);
         try {
-          await fs.copy(uris[0], fileUri.getUriFromPath(path));
+          await fs.copy(uris[0], fileUri.getUriFromPath(root));
           await this.validateTree(path);
-          result.success(path);
+          result.success(this.documents.location(path, uris[0], false));
         } catch (error) {
           try { await fs.rmdir(root); } catch (_) {}
           throw error as Error;
@@ -379,13 +432,38 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
           throw new Error('Invalid document name.');
         }
         options.newFileNames = [suggestedName];
+        const initial = call.argument('initialDirectory') as string | null;
+        if (initial?.startsWith('file://')) options.defaultFilePathUri = initial;
+        if (deviceInfo.sdkApiVersion >= 23) options.autoCreateEmptyFile = false;
         const filters = this.suffixFilters(call);
         if (filters.length > 0) options.fileSuffixChoices = filters;
         const uris = await new picker.DocumentViewPicker(this.context).save(options);
         if (uris.length === 0) { result.success(null); return; }
         const path = await this.workspace() + '/' + this.name(uris[0]);
         this.saves.set(path, uris[0]);
-        result.success(path);
+        result.success(this.documents.location(path, uris[0], true));
+        return;
+      }
+      case 'hasDirectoryLocation': {
+        result.success(this.directories.has(call.argument('path') as string)); return;
+      }
+      case 'directorySaveLocation': {
+        const root = this.sandboxPath(call.argument('root') as string);
+        const uri = this.directories.get(root);
+        if (!uri) throw new Error('No authorized output directory.');
+        if (!await this.authorizeDirectory(uri)) throw new Error('所选目录没有写入授权，请使用系统保存文件选择器选择保存位置。');
+        const name = this.name(call.argument('name') as string);
+        const dot = name.lastIndexOf('.');
+        const stem = dot > 0 ? name.substring(0, dot) : name;
+        const extension = dot > 0 ? name.substring(dot) : '';
+        let candidate = name;
+        let number = 2;
+        while (await fs.access(new fileUri.FileUri(uri + '/' + encodeURIComponent(candidate)).path)) candidate = stem + ' (' + number++ + ')' + extension;
+        const path = root + '/' + candidate;
+        const target = uri + '/' + encodeURIComponent(candidate);
+        this.saves.set(path, target);
+        this.freshSaves.add(path);
+        result.success(this.documents.location(path, target, true));
         return;
       }
       case 'hasSaveLocation': {
@@ -399,20 +477,40 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         if (!uri) throw new Error('No authorized save location for this file.');
         await this.validateExportPath(path);
         if (!(await fs.lstat(path)).isFile()) throw new Error('Save source must be a regular file.');
-        await this.copy(path, uri);
+        if (this.freshSaves.has(path) && await fs.access(new fileUri.FileUri(uri).path)) {
+          throw new Error('The output file already exists. Select another save location.');
+        }
+        if (await fs.access(new fileUri.FileUri(uri).path)) await this.documents.writeCopy(path, uri);
+        else await this.copy(path, uri);
+        const location = await this.documents.registerSaved(path, uri);
         this.saves.delete(path);
-        result.success(null);
+        this.freshSaves.delete(path);
+        result.success(location);
+        return;
+      }
+      case 'downloadDirectoryLocation': {
+        const options = new picker.DocumentSaveOptions();
+        options.pickerMode = picker.DocumentPickerMode.DOWNLOAD;
+        const uris = await new picker.DocumentViewPicker(this.context).save(options);
+        if (uris.length === 0) { result.success(null); return; }
+        if (!await this.directoryWritable(uris[0])) throw new Error('下载目录没有写入授权。');
+        const root = await this.workspace();
+        this.directories.set(root, uris[0]);
+        result.success(this.documents.location(root, uris[0], true));
         return;
       }
       case 'directoryLocation': {
         const options = new picker.DocumentSelectOptions();
+        const initial = call.argument('initialDirectory') as string | null;
+        if (initial?.startsWith('file://')) options.defaultFilePathUri = initial;
         options.selectMode = picker.DocumentSelectMode.FOLDER;
         options.maxSelectNumber = 1;
         const uris = await new picker.DocumentViewPicker(this.context).select(options);
         if (uris.length === 0) { result.success(null); return; }
+        if (!await this.authorizeDirectory(uris[0])) throw new Error('所选目录没有写入授权，请重新选择可写的输出目录。');
         const root = await this.workspace();
         this.directories.set(root, uris[0]);
-        result.success(root);
+        result.success(this.documents.location(root, uris[0], true));
         return;
       }
       case 'finishDirectory': {
@@ -427,24 +525,27 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
           const names = await fs.listFile(path);
           // Preflight all collisions before publishing any selected entries.
           for (const name of names) {
-            if (await fs.access(uri + '/' + encodeURIComponent(name))) {
+            if (await fs.access(new fileUri.FileUri(uri + '/' + encodeURIComponent(name)).path)) {
               throw new Error('An exported entry already exists: ' + name);
             }
           }
           for (const name of names) {
-            await fs.copy(fileUri.getUriFromPath(path + '/' + name), uri + '/' + encodeURIComponent(name));
+            const source = path + '/' + name;
+            const target = uri + '/' + encodeURIComponent(name);
+            await this.publishEntry(source, uri);
+            if ((await fs.lstat(source)).isFile()) await this.documents.registerSaved(source, target);
           }
           this.directories.delete(checkedRoot);
-          result.success(uri);
+          result.success(new fileUri.FileUri(uri).path);
           return;
         }
         const target = uri + '/' + encodeURIComponent(this.name(path));
         await this.validateExportPath(path);
         // mkdir accepts sandbox paths only; copy supports authorized document URIs.
-        if (await fs.access(target)) throw new Error('Export directory already exists.');
-        await fs.copy(fileUri.getUriFromPath(path), target);
+        if (await fs.access(new fileUri.FileUri(target).path)) throw new Error('Export directory already exists.');
+        await this.publishEntry(path, uri);
         this.directories.delete(checkedRoot);
-        result.success(target);
+        result.success(new fileUri.FileUri(target).path);
         return;
       }
       case 'fileIcon': {
@@ -471,6 +572,17 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success(null);
         return;
       }
+      case 'copyDocumentToUri': {
+        const path = this.localPath(call);
+        const uri = call.argument('uri') as string;
+        if (typeof uri !== 'string' || !uri.startsWith('file://')) throw new Error('Invalid document URI.');
+        await this.validateExportPath(path);
+        if (!(await fs.lstat(path)).isFile()) throw new Error('Copy source must be a regular file.');
+        if (await fs.access(new fileUri.FileUri(uri).path)) await this.documents.writeCopy(path, uri);
+        else await this.copy(path, uri);
+        result.success(null);
+        return;
+      }
       case 'exportFile': {
         const path = this.localPath(call);
         await this.validateExportPath(path);
@@ -479,7 +591,8 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         options.newFileNames = [this.name(path)];
         const uris = await new picker.DocumentViewPicker(this.context).save(options);
         if (uris.length === 0) { result.success(false); return; }
-        await this.copy(path, uris[0]);
+        if (await fs.access(new fileUri.FileUri(uris[0]).path)) await this.documents.writeCopy(path, uris[0]);
+        else await this.copy(path, uris[0]);
         result.success(true);
         return;
       }

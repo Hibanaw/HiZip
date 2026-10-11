@@ -101,6 +101,7 @@ class ArchiveCreateDialog extends StatefulWidget {
     this.initialOutputPath = '',
     this.selectContents,
     this.selectOutputPath,
+    this.formatDisplayPath,
     this.suggestOutputPath,
     this.onSelectionConfirmed,
   });
@@ -113,6 +114,7 @@ class ArchiveCreateDialog extends StatefulWidget {
   final String initialOutputPath;
   final Future<List<String>> Function({bool foldersOnly})? selectContents;
   final Future<String?> Function(String path, String format)? selectOutputPath;
+  final String Function(String path)? formatDisplayPath;
   final Future<String> Function(List<String> paths, String format)?
   suggestOutputPath;
   final void Function(List<String> paths, String outputPath)?
@@ -126,6 +128,12 @@ class _ArchiveCreateDialogState extends State<ArchiveCreateDialog> {
       confirm = TextEditingController(),
       comment = TextEditingController();
   late final output = TextEditingController(text: widget.initialOutputPath);
+  final displayOutput = TextEditingController();
+  void updateDisplayOutput() {
+    displayOutput.text =
+        widget.formatDisplayPath?.call(output.text) ?? output.text;
+  }
+
   late List<String> paths = List.of(widget.initialPaths);
   bool picking = false, customOutput = false, customNesting = false;
   bool overwriteAllowed = false;
@@ -143,6 +151,8 @@ class _ArchiveCreateDialogState extends State<ArchiveCreateDialog> {
   @override
   void initState() {
     super.initState();
+    output.addListener(updateDisplayOutput);
+    updateDisplayOutput();
     if (fullConfiguration && paths.isNotEmpty && output.text.isEmpty) {
       updateSuggestedOutput();
     }
@@ -261,7 +271,9 @@ class _ArchiveCreateDialogState extends State<ArchiveCreateDialog> {
     password.clear();
     confirm.clear();
     comment.dispose();
+    output.removeListener(updateDisplayOutput);
     output.dispose();
+    displayOutput.dispose();
     password.dispose();
     confirm.dispose();
     super.dispose();
@@ -300,9 +312,16 @@ class _ArchiveCreateDialogState extends State<ArchiveCreateDialog> {
                                   children: [
                                     Expanded(
                                       child: Tooltip(
-                                        message: path,
+                                        message:
+                                            widget.formatDisplayPath?.call(
+                                              path,
+                                            ) ??
+                                            path,
                                         child: Text(
-                                          path,
+                                          widget.formatDisplayPath?.call(
+                                                path,
+                                              ) ??
+                                              path,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
@@ -355,7 +374,7 @@ class _ArchiveCreateDialogState extends State<ArchiveCreateDialog> {
                   Expanded(
                     child: DesktopTextField(
                       key: const ValueKey('create-output-path'),
-                      controller: output,
+                      controller: displayOutput,
                       readOnly: true,
                     ),
                   ),

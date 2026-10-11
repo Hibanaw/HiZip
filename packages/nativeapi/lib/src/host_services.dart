@@ -1,5 +1,6 @@
 import 'package:file_selector/file_selector.dart' as files;
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart' as paths;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,15 +58,126 @@ abstract final class NativePaths {
       : (await paths.getApplicationSupportDirectory()).path;
 }
 
-/// Pickers return sandbox copies on HarmonyOS. Export explicitly after edits.
+/// A system selection and its private engine working copy are distinct locations.
+class NativeDocumentLocation {
+  const NativeDocumentLocation({
+    required this.workingPath,
+    required this.uri,
+    required this.displayPath,
+    required this.writable,
+  });
+  factory NativeDocumentLocation.fromMap(Map<Object?, Object?> data) =>
+      NativeDocumentLocation(
+        workingPath: (data['workingPath'] ?? data['path'])! as String,
+        uri: data['uri']! as String,
+        displayPath: data['displayPath']! as String,
+        writable: data['writable'] == true,
+      );
+  final String workingPath, uri, displayPath;
+
+  /// Compatibility name for engine callers; use displayPath in the UI.
+  String get path => workingPath;
+  final bool writable;
+}
+
+/// Picker grants stay with the source URI; edits are written back after validation.
 abstract final class NativeDocuments {
+  static final _locations = <String, NativeDocumentLocation>{};
+  static String? _remember(Object? value) {
+    if (value == null || value is String) return value as String?;
+    final location = NativeDocumentLocation.fromMap(
+      Map<Object?, Object?>.from(value as Map),
+    );
+    _locations[location.path] = location;
+    return location.path;
+  }
+
+  static List<String> _rememberAll(List<Object?>? values) =>
+      (values ?? []).map(_remember).whereType<String>().toList();
+
+  static String displayPath(String path) {
+    if (!NativePlatform.isHarmonyOS) return path;
+    final exact = _locations[path];
+    if (exact != null) return exact.displayPath;
+    final ancestors =
+        _locations.values
+            .where((location) => p.isWithin(location.path, path))
+            .toList()
+          ..sort((a, b) => b.path.length.compareTo(a.path.length));
+    if (ancestors.isNotEmpty) {
+      final root = ancestors.first;
+      return p.join(root.displayPath, p.relative(path, from: root.path));
+    }
+    for (final location in _locations.values) {
+      if (p.dirname(location.path) == p.dirname(path)) {
+        return p.join(p.dirname(location.displayPath), p.basename(path));
+      }
+    }
+    return path.contains('/imports/') ? p.basename(path) : path;
+  }
+
+  static String? _initialUri(String? directory) {
+    if (directory == null || directory.isEmpty) return null;
+    if (directory.startsWith('file://')) return directory;
+    final exact = _locations[directory];
+    if (exact != null) return exact.uri;
+    for (final location in _locations.values) {
+      if (p.dirname(location.path) == directory) {
+        return location.uri.substring(0, location.uri.lastIndexOf('/'));
+      }
+    }
+    return null;
+  }
+
+  static Future<NativeDocumentLocation?> location(String path) async {
+    if (!NativePlatform.isHarmonyOS) return null;
+    final data = await NativePlatform.channel.invokeMapMethod<Object?, Object?>(
+      'documentLocation',
+      {'path': path},
+    );
+    if (data == null) return null;
+    _remember(data);
+    return _locations[path];
+  }
+
+  static Future<NativeDocumentLocation> importUri(
+    String uri, {
+    bool readOnly = false,
+  }) async {
+    NativePlatform._requireHarmonyOS();
+    final data = await NativePlatform.channel.invokeMapMethod<Object?, Object?>(
+      'importDocument',
+      {'uri': uri, 'readOnly': readOnly},
+    );
+    final path = _remember(data)!;
+    return _locations[path]!;
+  }
+
+  static Future<String?> downloadDirectory() async {
+    NativePlatform._requireHarmonyOS();
+    return _remember(
+      await NativePlatform.channel.invokeMethod<Object?>(
+        'downloadDirectoryLocation',
+      ),
+    );
+  }
+
+  static Future<void> prepareWrite(String path) => NativePlatform.channel
+      .invokeMethod<void>('prepareDocumentWrite', {'path': path});
+  static Future<void> finishWrite(String path) => NativePlatform.channel
+      .invokeMethod<void>('finishDocumentWrite', {'path': path});
+  static Future<void> abortWrite(String path) => NativePlatform.channel
+      .invokeMethod<void>('abortDocumentWrite', {'path': path});
+
   static void listenForOpenFiles(Future<void> Function(List<String>)? receive) {
     if (!NativePlatform.isHarmonyOS) return;
     Future<void> drain() async {
-      final paths = await NativePlatform.channel.invokeListMethod<String>(
-        'pendingOpenFiles',
+      final paths = _rememberAll(
+        await NativePlatform.channel.invokeListMethod<Object?>(
+          'pendingOpenFiles',
+        ),
       );
-      if (paths != null && paths.isNotEmpty) await receive?.call(paths);
+      if (paths.isNotEmpty) await receive?.call(paths);
     }
 
     NativePlatform.channel.setMethodCallHandler(
@@ -84,26 +196,29 @@ abstract final class NativeDocuments {
     if (!NativePlatform.isHarmonyOS) {
       return files.openFile(acceptedTypeGroups: acceptedTypeGroups);
     }
-    final path = await NativePlatform.channel.invokeMethod<String>('openFile', {
-      'extensions': acceptedTypeGroups
-          .expand((group) => group.extensions ?? <String>[])
-          .toList(),
-    });
+    final path = _remember(
+      await NativePlatform.channel.invokeMethod<Object?>('openFile', {
+        'extensions': acceptedTypeGroups
+            .expand((group) => group.extensions ?? <String>[])
+            .toList(),
+      }),
+    );
     return path == null ? null : files.XFile(path);
   }
 
   /// Imports a selected directory to the sandbox on HarmonyOS.
   /// Other hosts return the selected directory's original path.
-  static Future<String?> openDirectory() => NativePlatform.isHarmonyOS
-      ? NativePlatform.channel.invokeMethod<String>('openDirectory')
+  static Future<String?> openDirectory() async => NativePlatform.isHarmonyOS
+      ? _remember(
+          await NativePlatform.channel.invokeMethod<Object?>('openDirectory'),
+        )
       : files.getDirectoryPath();
 
   static Future<List<String>> openContents() async {
     NativePlatform._requireHarmonyOS();
-    return (await NativePlatform.channel.invokeListMethod<String>(
-          'openContents',
-        )) ??
-        [];
+    return _rememberAll(
+      await NativePlatform.channel.invokeListMethod<Object?>('openContents'),
+    );
   }
 
   static Future<List<files.XFile>> openFiles({
@@ -113,12 +228,12 @@ abstract final class NativeDocuments {
       return files.openFiles(acceptedTypeGroups: acceptedTypeGroups);
     }
     final selected = await NativePlatform.channel
-        .invokeListMethod<String>('openFiles', {
+        .invokeListMethod<Object?>('openFiles', {
           'extensions': acceptedTypeGroups
               .expand((g) => g.extensions ?? <String>[])
               .toList(),
         });
-    return (selected ?? []).map(files.XFile.new).toList();
+    return _rememberAll(selected).map(files.XFile.new).toList();
   }
 
   static Future<files.FileSaveLocation?> getSaveLocation({
@@ -133,22 +248,61 @@ abstract final class NativeDocuments {
         acceptedTypeGroups: acceptedTypeGroups,
       );
     }
-    final path = await NativePlatform.channel
-        .invokeMethod<String>('saveLocation', {
-          'name': suggestedName ?? 'Archive.zip',
-          'extensions': acceptedTypeGroups
-              .expand((g) => g.extensions ?? <String>[])
-              .toList(),
-        });
+    final path = _remember(
+      await NativePlatform.channel.invokeMethod<Object?>('saveLocation', {
+        'name': suggestedName ?? 'Archive.zip',
+        'initialDirectory': _initialUri(initialDirectory),
+        'extensions': acceptedTypeGroups
+            .expand((g) => g.extensions ?? <String>[])
+            .toList(),
+      }),
+    );
     return path == null ? null : files.FileSaveLocation(path);
   }
 
-  static Future<String?> getDirectoryPath({String? confirmButtonText}) {
-    if (!NativePlatform.isHarmonyOS) {
-      return files.getDirectoryPath(confirmButtonText: confirmButtonText);
-    }
-    return NativePlatform.channel.invokeMethod<String>('directoryLocation');
+  /// The actual system selection, including URI and display path.
+  static Future<NativeDocumentLocation?> pickDirectoryLocation({
+    String? initialDirectory,
+  }) async {
+    NativePlatform._requireHarmonyOS();
+    final path = _remember(
+      await NativePlatform.channel.invokeMethod<Object?>('directoryLocation', {
+        'initialDirectory': _initialUri(initialDirectory),
+      }),
+    );
+    return path == null ? null : _locations[path];
   }
+
+  /// Engine compatibility helper. On HarmonyOS this returns a private working
+  /// path, never the user-visible system directory; use pickDirectoryLocation
+  /// or displayPath for the system selection.
+  static Future<String?> getDirectoryPath({
+    String? confirmButtonText,
+    String? initialDirectory,
+  }) async {
+    if (!NativePlatform.isHarmonyOS) {
+      return files.getDirectoryPath(
+        confirmButtonText: confirmButtonText,
+        initialDirectory: initialDirectory,
+      );
+    }
+    return (await pickDirectoryLocation(
+      initialDirectory: initialDirectory,
+    ))?.workingPath;
+  }
+
+  static Future<bool> hasDirectoryLocation(String path) async =>
+      (await NativePlatform.channel.invokeMethod<bool>('hasDirectoryLocation', {
+        'path': path,
+      })) ??
+      false;
+  static Future<String> directorySaveLocation(String root, String name) async =>
+      _remember(
+        await NativePlatform.channel.invokeMethod<Object?>(
+          'directorySaveLocation',
+          {'root': root, 'name': name},
+        ),
+      )!;
 
   static Future<bool> hasSaveLocation(String path) async =>
       !NativePlatform.isHarmonyOS ||
@@ -157,9 +311,14 @@ abstract final class NativeDocuments {
           }) ??
           false);
 
-  static Future<void> finishSave(String path) => NativePlatform.isHarmonyOS
-      ? NativePlatform.channel.invokeMethod<void>('finishSave', {'path': path})
-      : Future.value();
+  static Future<void> finishSave(String path) async {
+    if (!NativePlatform.isHarmonyOS) return;
+    _remember(
+      await NativePlatform.channel.invokeMethod<Object?>('finishSave', {
+        'path': path,
+      }),
+    );
+  }
 
   static Future<String> finishDirectory(String root, String output) async {
     if (!NativePlatform.isHarmonyOS) return output;
@@ -179,6 +338,15 @@ abstract final class NativeDocuments {
       'path': path,
       'mimeType': mimeType,
       'writable': writable,
+    });
+  }
+
+  /// Copies to an already authorized URI without changing the archive's source.
+  static Future<void> copyToUri(String path, String uri) {
+    NativePlatform._requireHarmonyOS();
+    return NativePlatform.channel.invokeMethod<void>('copyDocumentToUri', {
+      'path': path,
+      'uri': uri,
     });
   }
 

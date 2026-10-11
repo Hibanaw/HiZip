@@ -11,6 +11,7 @@ import 'package:crypto/crypto.dart';
 import 'package:hizip_native/hizip_native.dart';
 import 'package:hizip_native/zip_metadata.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:nativeapi/nativeapi.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'harmony_bridge.dart';
@@ -536,7 +537,7 @@ class ArchiveService {
           'backup-${DateTime.now().microsecondsSinceEpoch}.zip',
         ),
       );
-      await NativeArchive.commit(output, file.archive);
+      await _commitArchive(output, file.archive);
       final hash = await _digest(file.archive);
       for (final f in _opened.where((f) => f.archive == file.archive)) {
         f.archiveHash = hash;
@@ -721,7 +722,7 @@ class ArchiveService {
           'backup-${DateTime.now().microsecondsSinceEpoch}.zip',
         ),
       );
-      await NativeArchive.commit(output, doc.path);
+      await _commitArchive(output, doc.path);
       final hash = await _digest(doc.path);
       for (final file in _opened.where((f) => f.archive == doc.path)) {
         file.archiveHash = hash;
@@ -813,7 +814,7 @@ class ArchiveService {
       if (await _digest(doc.path) != snapshot) {
         throw StateError('Archive changed during comment editing');
       }
-      await NativeArchive.commit(output, doc.path);
+      await _commitArchive(output, doc.path);
       final hash = await _digest(doc.path);
       for (final opened in _opened.where((file) => file.archive == doc.path)) {
         opened.archiveHash = hash;
@@ -876,7 +877,7 @@ class ArchiveService {
       if (await _digest(doc.path) != snapshot) {
         throw StateError('压缩包在操作过程中已变化，请重试。');
       }
-      await NativeArchive.commit(output, doc.path);
+      await _commitArchive(output, doc.path);
       final hash = await _digest(doc.path);
       for (final opened in _opened.where((file) => file.archive == doc.path)) {
         opened.archiveHash = hash;
@@ -978,7 +979,7 @@ class ArchiveService {
           'backup-${DateTime.now().microsecondsSinceEpoch}.zip',
         ),
       );
-      await NativeArchive.commit(output, doc.path);
+      await _commitArchive(output, doc.path);
       final hash = await _digest(doc.path);
       for (final file
           in _opened.where((file) => file.archive == doc.path).toList()) {
@@ -1202,32 +1203,38 @@ Future<ArchiveDocument> _readArchive(
   String password = '',
   String? logicalPath,
   bool forceReadOnly = false,
-}) => runArchiveWorker(
-  () => NativeArchive.listBlocking(
-    path,
-    (j) => ArchiveDocument(
-      logicalPath ?? path,
-      (j['entries'] as List)
-          .map(
-            (e) => ArchiveEntry.fromJson(
-              e as Map<String, dynamic>,
-              unlocked: password.isNotEmpty,
-            ),
-          )
-          .toList(),
-      j['format'] as String,
-      !forceReadOnly && j['writable'] as bool,
-      nativePath: path,
+}) async {
+  final source = HarmonyBridge.supported
+      ? await NativeDocuments.location(logicalPath ?? path)
+      : null;
+  final readOnly = forceReadOnly || source?.writable == false;
+  return runArchiveWorker(
+    () => NativeArchive.listBlocking(
+      path,
+      (j) => ArchiveDocument(
+        logicalPath ?? path,
+        (j['entries'] as List)
+            .map(
+              (e) => ArchiveEntry.fromJson(
+                e as Map<String, dynamic>,
+                unlocked: password.isNotEmpty,
+              ),
+            )
+            .toList(),
+        j['format'] as String,
+        !readOnly && j['writable'] as bool,
+        nativePath: path,
+        encoding: encoding,
+        password: password,
+        resolvedEncoding: j['encoding'] as String?,
+        comment: j['comment'] as String? ?? '',
+      ),
       encoding: encoding,
       password: password,
-      resolvedEncoding: j['encoding'] as String?,
-      comment: j['comment'] as String? ?? '',
     ),
-    encoding: encoding,
-    password: password,
-  ),
-  name: 'hizip-read-index',
-);
+    name: 'hizip-read-index',
+  );
+}
 
 class _ImportPlan {
   _ImportPlan(this.removed, this.names, this.paths, this.targets, this.hashes);
@@ -1309,8 +1316,9 @@ Future<bool> _caseInsensitiveDirectory(Directory dir) async {
   final probe = File(p.join(dir.path, '.HiZipCase${pid}_${dir.hashCode}'));
   try {
     await probe.writeAsString('');
-    return await File(p.join(dir.path, p.basename(probe.path).toLowerCase()))
-        .exists();
+    return await File(
+      p.join(dir.path, p.basename(probe.path).toLowerCase()),
+    ).exists();
   } on FileSystemException {
     return false;
   } finally {
@@ -1855,3 +1863,15 @@ Future<void> _runExtractionBatch(
     },
   );
 }, name: 'hizip-extract-$shard');
+
+Future<void> _commitArchive(String staged, String archive) async {
+  if (!HarmonyBridge.supported) return NativeArchive.commit(staged, archive);
+  await NativeDocuments.prepareWrite(archive);
+  try {
+    await NativeArchive.commit(staged, archive);
+    await NativeDocuments.finishWrite(archive);
+  } catch (_) {
+    await NativeDocuments.abortWrite(archive);
+    rethrow;
+  }
+}

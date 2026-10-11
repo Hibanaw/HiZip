@@ -1,3 +1,4 @@
+import 'package:nativeapi/nativeapi.dart';
 import '../services/platform_files.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -66,6 +67,7 @@ Widget buildAuxiliaryDialog(
         .selectCompressionContents(foldersOnly: foldersOnly),
     suggestOutputPath: availableFinderArchivePath,
     selectOutputPath: selectArchiveOutputPath,
+    formatDisplayPath: NativeDocuments.displayPath,
     onSelectionConfirmed: (paths, output) =>
         selection.addAll({'paths': paths, 'output': output}),
   ),
