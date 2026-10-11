@@ -24,7 +24,7 @@ vm.runInNewContext(ts.transpileModule(source, {
   },
 });
 (async () => {
-  const uri = 'file://docs/storage/Users/currentUser/Download/HiZip-edit-123/中文%20document.docx';
+  const uri = 'file://com.hibanaw.hizip/data/storage/el2/base/files/hizip-edit-123/中文%20document.docx';
   const wants = [];
   const systemFiles = new exportsObject.SystemFiles({
     startAbility: async want => wants.push(want),

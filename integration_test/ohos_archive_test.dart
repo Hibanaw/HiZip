@@ -20,6 +20,10 @@ import 'package:path/path.dart' as p;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  if (const bool.fromEnvironment('HIZIP_SANDBOX_EDIT_ONLY')) {
+    registerSandboxEditingTest();
+    return;
+  }
   testWidgets('HarmonyOS host uses public APIs and a single window', (_) async {
     expect(NativePlatform.isHarmonyOS, isTrue);
     final host = await NativePlatform.hostInfo();
@@ -212,66 +216,7 @@ void main() {
     }
   });
 
-  testWidgets('Public DOCX editing copy synchronizes back into the ZIP', (
-    _,
-  ) async {
-    final root = await Directory(
-      await NativePaths.temporaryDirectory(),
-    ).createTemp('hizip-edit-test-');
-    final service = ArchiveService(temporaryRoot: root.path);
-    try {
-      final source = await createTestDocx(
-        root,
-        '中文 文档.docx',
-        'original document',
-      );
-      final archive = p.join(root.path, 'office.zip');
-      await service.create(archive, [source.path]);
-      final doc = await service.read(archive);
-      final opened = await service.prepareExternal(doc, doc.entries.single);
-      final uri = (await NativePlatform.channel.invokeMethod<String>(
-        'prepareExternalFile',
-        {'path': opened.path, 'writable': true},
-      ))!;
-      expect(uri, startsWith('file://docs/'));
-      expect(Uri.decodeComponent(uri.split('/').last), '中文 文档.docx');
-      final imported = await NativeDocuments.importUri(uri);
-      expect(
-        await File(imported.path).readAsBytes(),
-        await source.readAsBytes(),
-      );
-      for (var index = 1; index <= 2; index++) {
-        final revision = await createTestDocx(
-          root,
-          'revision-$index.docx',
-          'saved revision $index',
-        );
-        await NativeDocuments.copyToUri(revision.path, uri);
-        expect(await service.changes(), [opened]);
-        expect(
-          await File(opened.path).readAsBytes(),
-          await revision.readAsBytes(),
-        );
-        await service.save(opened);
-        expect(await service.changes(), isEmpty);
-        final updated = await service.read(archive);
-        expect(
-          await service.preview(updated, updated.entries.single),
-          await revision.readAsBytes(),
-        );
-        expect(
-          await NativePlatform.channel.invokeMethod<String>(
-            'prepareExternalFile',
-            {'path': opened.path, 'writable': true},
-          ),
-          uri,
-        );
-      }
-    } finally {
-      await service.dispose();
-      await root.delete(recursive: true);
-    }
-  });
+  registerSandboxEditingTest();
 
   testWidgets(
     'System directory exports copy folders and reject existing targets',
@@ -442,6 +387,76 @@ void main() {
     tester.view.resetDevicePixelRatio();
     await tester.binding.setSurfaceSize(null);
   });
+}
+
+void registerSandboxEditingTest() {
+  testWidgets(
+    'Sandbox DOCX editing copy synchronizes and releases after ZIP close',
+    (_) async {
+      final root = await Directory(
+        await NativePaths.temporaryDirectory(),
+      ).createTemp('hizip-edit-test-');
+      final service = ArchiveService(temporaryRoot: root.path);
+      try {
+        final source = await createTestDocx(
+          root,
+          '中文 文档.docx',
+          'original document',
+        );
+        final archive = p.join(root.path, 'office.zip');
+        await service.create(archive, [source.path]);
+        final doc = await service.read(archive);
+        final opened = await service.prepareExternal(doc, doc.entries.single);
+        final uri = (await NativePlatform.channel.invokeMethod<String>(
+          'prepareExternalFile',
+          {'path': opened.path, 'writable': true},
+        ))!;
+        expect(uri, startsWith('file://com.hibanaw.hizip/'));
+        final editingPath = Uri.decodeComponent(Uri.parse(uri).path);
+        expect(editingPath, contains('/files/hizip-edit-'));
+        expect(Uri.decodeComponent(uri.split('/').last), '中文 文档.docx');
+        final imported = await NativeDocuments.importUri(uri);
+        expect(
+          await File(imported.path).readAsBytes(),
+          await source.readAsBytes(),
+        );
+        for (var index = 1; index <= 2; index++) {
+          final revision = await createTestDocx(
+            root,
+            'revision-$index.docx',
+            'saved revision $index',
+          );
+          await NativeDocuments.copyToUri(revision.path, uri);
+          expect(await service.changes(), [opened]);
+          expect(
+            await File(opened.path).readAsBytes(),
+            await revision.readAsBytes(),
+          );
+          await service.save(opened);
+          expect(await service.changes(), isEmpty);
+          final updated = await service.read(archive);
+          expect(
+            await service.preview(updated, updated.entries.single),
+            await revision.readAsBytes(),
+          );
+          expect(
+            await NativePlatform.channel.invokeMethod<String>(
+              'prepareExternalFile',
+              {'path': opened.path, 'writable': true},
+            ),
+            uri,
+          );
+        }
+        expect(await File(editingPath).exists(), isTrue);
+        await service.closeArchive(archive);
+        expect(await Directory(p.dirname(editingPath)).exists(), isFalse);
+        expect(await File(opened.path).exists(), isFalse);
+      } finally {
+        await service.dispose();
+        await root.delete(recursive: true);
+      }
+    },
+  );
 }
 
 Future<File> createTestDocx(Directory root, String name, String text) async {

@@ -137,6 +137,14 @@ void main() {
                 await file.setLastModified(opened.stat.modified);
                 return [opened.path];
               }
+              if (call.method == 'releaseExternalFiles') {
+                expect(call.arguments, {
+                  'paths': [opened.path],
+                });
+                // Closing must capture a final editor save before deciding
+                // whether the private working copy can be deleted.
+                await File(opened.path).writeAsString('final doc');
+              }
               return null;
             });
             expect(await service.changes(), [opened]);
@@ -147,6 +155,12 @@ void main() {
                 await service.preview(updated, updated.entries.single),
               ),
               'saved doc',
+            );
+            await service.closeArchive(archive);
+            expect(await File(opened.path).readAsString(), 'final doc');
+            expect(
+              calls.where((call) => call.method == 'releaseExternalFiles'),
+              hasLength(1),
             );
           } finally {
             await service.dispose();

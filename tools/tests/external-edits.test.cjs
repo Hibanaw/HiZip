@@ -9,12 +9,11 @@ const ts = require(path.join(root,
   '.toolchains/command-line-tools/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'hizip-external-test-'));
 const cacheDir = path.join(temporary, 'cache');
-const publicDirectory = path.join(temporary, 'public');
-fs.mkdirSync(cacheDir); fs.mkdirSync(publicDirectory);
+const filesDir = path.join(temporary, 'files');
+fs.mkdirSync(cacheDir); fs.mkdirSync(filesDir);
 const resolve = value => value.startsWith('file://') ? decodeURIComponent(new URL(value).pathname) : value;
 const descriptors = new Map();
 const mode = { READ_ONLY: fs.constants.O_RDONLY, READ_WRITE: fs.constants.O_RDWR, CREATE: fs.constants.O_CREAT };
-let pickerCalls = 0;
 let copyHook;
 const io = {
   OpenMode: mode, WhenceType: { SEEK_SET: 0 },
@@ -27,6 +26,10 @@ const io = {
   read: async (fd, buffer, options) => fs.readSync(fd, new Uint8Array(buffer), 0, options.length, options.offset),
   access: async value => fs.existsSync(resolve(value)),
   mkdir: async value => fs.mkdirSync(value),
+  mkdtemp: async prefix => {
+    assert.ok(prefix.endsWith('XXXXXX'), 'HarmonyOS mkdtemp requires a six-X template');
+    return fs.mkdtempSync(prefix.slice(0, -6));
+  },
   rmdir: async value => fs.rmSync(value, { recursive: true }),
   unlink: async value => fs.unlinkSync(value),
   rename: async (from, to) => fs.renameSync(from, to),
@@ -54,11 +57,6 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,
       fileIo: io,
       fileUri: { getUriFromPath: value => `file://com.hibanaw.hizip${encodeURI(value)}`,
         FileUri: class { constructor(uri) { this.path = resolve(uri); } } },
-      picker: { DocumentSaveOptions: class {}, DocumentPickerMode: { DOWNLOAD: 1 },
-        DocumentViewPicker: class { async save(options) {
-          assert.equal(options.pickerMode, 1); pickerCalls++;
-          return [`file://docs${publicDirectory}`];
-        } } },
     };
     if (name === '@kit.CryptoArchitectureKit') return { cryptoFramework: {
       createMd: () => { const hash = crypto.createHash('sha256'); return {
@@ -69,12 +67,12 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,
   },
 });
 (async () => {
-  const edits = new exportsObject.ExternalEdits(() => ({ cacheDir }));
+  const edits = new exportsObject.ExternalEdits(() => ({ cacheDir, filesDir }));
   const local = path.join(cacheDir, '中文 document.docx');
   fs.writeFileSync(local, 'original document');
   const [uri, concurrentUri] = await Promise.all([edits.prepare(local), edits.prepare(local)]);
   assert.equal(concurrentUri, uri);
-  assert.ok(uri.startsWith('file://docs'));
+  assert.ok(uri.startsWith(`file://com.hibanaw.hizip${filesDir}/hizip-edit-`));
   assert.equal(path.basename(resolve(uri)), '中文 document.docx');
   assert.equal(fs.readFileSync(resolve(uri), 'utf8'), 'original document');
   assert.equal(await edits.synchronize(local), false);
@@ -87,7 +85,7 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,
     assert.equal(await edits.prepare(local), uri);
     assert.equal(fs.readFileSync(resolve(uri), 'utf8'), content);
   }
-  assert.equal(pickerCalls, 1);
+  assert.equal(fs.readdirSync(filesDir).length, 1);
   fs.writeFileSync(resolve(uri), 'third-party edit'); fs.writeFileSync(local, 'local edit');
   await assert.rejects(edits.synchronize(local), /同时发生变化/);
   assert.equal(fs.readFileSync(local, 'utf8'), 'local edit');
@@ -102,8 +100,28 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,
   await assert.rejects(edits.prepare(local), /移动或删除/);
   assert.equal(fs.readFileSync(local, 'utf8'), 'changed during sync');
   assert.equal(await edits.synchronize(path.join(cacheDir, 'untracked')), false);
+  await edits.release(local);
+  assert.deepEqual(fs.readdirSync(filesDir), []);
+
+  // Closing copies a last unpolled save back before deleting the edit directory.
+  const finalUri = await edits.prepare(local);
+  fs.writeFileSync(resolve(finalUri), 'final save before closing');
+  await edits.release(local);
+  assert.equal(fs.readFileSync(local, 'utf8'), 'final save before closing');
+  assert.deepEqual(fs.readdirSync(filesDir), []);
+  await edits.release(path.join(cacheDir, 'untracked'));
+  // A conflicting edit prevents cleanup and leaves both versions intact.
+  const conflictUri = await edits.prepare(local);
+  fs.writeFileSync(resolve(conflictUri), 'external conflict');
+  fs.writeFileSync(local, 'local conflict');
+  await assert.rejects(edits.release(local), /同时发生变化/);
+  assert.equal(fs.readFileSync(resolve(conflictUri), 'utf8'), 'external conflict');
+  assert.equal(fs.readFileSync(local, 'utf8'), 'local conflict');
+  fs.writeFileSync(local, 'final save before closing');
+  await edits.release(local);
+  assert.deepEqual(fs.readdirSync(filesDir), []);
   assert.deepEqual(fs.readdirSync(cacheDir), ['中文 document.docx']);
   edits.clear();
-  console.log('ExternalEdits: public DOCX URI, repeat replacement saves, reuse, conflict protection, moving snapshot and missing file passed.');
+  console.log('ExternalEdits: sandbox DOCX URI, repeat saves, reuse, conflicts, moving snapshot, missing file and close cleanup passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; })
   .finally(() => fs.rmSync(temporary, { recursive: true, force: true }));

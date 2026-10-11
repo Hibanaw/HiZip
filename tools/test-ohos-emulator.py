@@ -16,14 +16,17 @@ root = pathlib.Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument('--device', default='127.0.0.1:5555')
 parser.add_argument('--skip-build', action='store_true')
+parser.add_argument('--hap', type=pathlib.Path, help='Existing signed or unsigned test HAP (requires --skip-build)')
 args = parser.parse_args()
+if args.hap and not args.skip_build:
+    parser.error('--hap requires --skip-build')
 if not args.skip_build:
     subprocess.run([sys.executable, str(root / 'tools/build-ohos-emulator.py'),
                     '--target', 'integration_test/ohos_archive_test.dart',
                     '--dart-define=INTEGRATION_TEST_SHOULD_REPORT_RESULTS_TO_NATIVE=false'], cwd=root, check=True)
 hdc = root / '.toolchains/command-line-tools/sdk/default/openharmony/toolchains/hdc'
 command = [str(hdc), '-t', args.device]
-hap = root / 'build/ohos/hap/entry-default-unsigned.hap'
+hap = args.hap or root / 'build/ohos/hap/entry-default-unsigned.hap'
 subprocess.run([*command, 'install', '-r', str(hap)], check=True)
 subprocess.run([*command, 'shell', 'aa', 'force-stop', 'com.hibanaw.hizip'], check=True)
 subprocess.run([*command, 'shell', 'hilog', '-r'], check=True, stdout=subprocess.DEVNULL)
