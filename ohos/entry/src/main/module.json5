@@ -6,7 +6,7 @@
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
     "deviceTypes": [
-      "2in1"
+      "2in1", "tablet", "phone"
     ],
     "deliveryWithInstall": true,
     "installationFree": false,
@@ -14,6 +14,7 @@
     "abilities": [
       {
         "name": "EntryAbility",
+        "launchType": "singleton",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
         "icon": "$media:icon",
@@ -22,6 +23,21 @@
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "skills": [
+          {
+            "entities": ["entity.system.default"],
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              {"scheme": "file", "type": "application/zip"},
+              {"scheme": "file", "type": "application/x-zip-compressed"},
+              {"scheme": "file", "type": "application/vnd.rar"},
+              {"scheme": "file", "type": "application/x-rar-compressed"},
+              {"scheme": "file", "type": "application/x-7z-compressed"},
+              {"scheme": "file", "type": "application/x-tar"},
+              {"scheme": "file", "type": "application/gzip"},
+              {"scheme": "file", "type": "application/x-bzip2"},
+              {"scheme": "file", "type": "application/x-xz"}
+            ]
+          },
           {
             "entities": [
               "entity.system.home"
@@ -34,7 +50,8 @@
       }
     ],
     "requestPermissions": [
-      {"name" :  "ohos.permission.INTERNET"},
+      {"name": "ohos.permission.INTERNET"},
+      {"name": "ohos.permission.GET_FILE_ICON"},
     ]
   }
 }

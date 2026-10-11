@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "dev.hizip.hizip",
+    "bundleName": "com.hibanaw.hizip",
     "vendor": "HiZip",
     "versionCode": 1,
     "versionName": "0.1.0",
