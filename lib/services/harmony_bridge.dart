@@ -29,4 +29,7 @@ class HarmonyBridge {
         'paths': paths,
       }) ??
       const [];
+
+  static Future<void> releaseExternalFiles(List<String> paths) =>
+      channel.invokeMethod<void>('releaseExternalFiles', {'paths': paths});
 }

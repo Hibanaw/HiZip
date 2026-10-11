@@ -561,17 +561,22 @@ export default class NativeApiPlugin implements FlutterPlugin, AbilityAware, Met
         result.success([{ name: '系统默认应用', path: 'system', icon: null, default: true }]);
         return;
       }
+      case 'releaseExternalFiles':
       case 'syncExternalFiles': {
         const paths = call.argument('paths') as string[];
         if (!Array.isArray(paths)) throw new Error('Invalid editing file list.');
         const checked = paths.map((path: string) => this.sandboxPath(path));
         const changed: string[] = [];
         for (const path of checked) {
+          if (await fs.access(path)) await this.validateExportPath(path);
+          if (call.method === 'releaseExternalFiles') {
+            await this.externalEdits.release(path);
+            continue;
+          }
           if (!await fs.access(path)) continue;
-          await this.validateExportPath(path);
           if (await this.externalEdits.synchronize(path)) changed.push(path);
         }
-        result.success(changed);
+        result.success(call.method === 'releaseExternalFiles' ? null : changed);
         return;
       }
       case 'prepareExternalFile':

@@ -149,6 +149,13 @@ class ArchiveService {
       _preparing.removeWhere((key, _) => key.startsWith('$archive\u0000'));
       return;
     }
+    if (HarmonyBridge.supported) {
+      final paths = _opened
+          .where((file) => file.archive == archive && !file.readOnly)
+          .map((file) => file.path)
+          .toList();
+      if (paths.isNotEmpty) await HarmonyBridge.releaseExternalFiles(paths);
+    }
     final kept = <String>{
       ..._clipboardExports.keys.where(
         (root) => p.dirname(root) == directory.path,

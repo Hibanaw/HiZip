@@ -1,15 +1,16 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 
 interface EditingDocument {
   uri: string;
   hash: string;
   version: string;
+  directory: string;
 }
 
-// Office editors need a document URI, not an application directory in Want's
-// stream list. Public editing copies also allow sibling-file replacement saves.
+// Share one named file in our sandbox using the system's URI permission flags.
+// Keep editing copies in filesDir so cache eviction cannot break an active editor.
 export class ExternalEdits {
   private context: () => common.UIAbilityContext;
   private documents: Map<string, EditingDocument> = new Map();
@@ -56,30 +57,38 @@ export class ExternalEdits {
     }
     const name = path.substring(path.lastIndexOf('/') + 1);
     if (!name || name === '.' || name === '..' || /[\/\\\u0000]/.test(name)) throw new Error('Invalid document name.');
-    const options = new picker.DocumentSaveOptions();
-    options.pickerMode = picker.DocumentPickerMode.DOWNLOAD;
-    const folders = await new picker.DocumentViewPicker(this.context()).save(options);
-    if (folders.length !== 1 || !folders[0].startsWith('file://docs/')) {
-      throw new Error('无法取得系统编辑副本的保存位置。');
-    }
-    // fs.mkdir is limited to the sandbox; fs.copy exports a fresh directory to
-    // the authorized DOWNLOAD URI. Each entry keeps its original filename.
-    const folderName = 'HiZip-edit-' + Date.now() + '-' + Math.floor(Math.random() * 1000000000);
-    const staging = this.context().cacheDir + '/' + folderName;
-    await fs.mkdir(staging);
+    const directory = await fs.mkdtemp(this.context().filesDir + '/hizip-edit-XXXXXX');
+    let prepared = false;
     try {
-      await fs.copyFile(path, staging + '/' + name);
-      await fs.copy(fileUri.getUriFromPath(staging), folders[0]);
-      const uri = folders[0].replace(/\/$/, '') + '/' + folderName + '/' + encodeURIComponent(name);
+      const editingPath = directory + '/' + name;
+      await fs.copyFile(path, editingPath);
+      const uri = fileUri.getUriFromPath(editingPath);
       const file = await fs.open(uri, fs.OpenMode.READ_WRITE);
       try {
         if (!(await fs.stat(file.fd)).isFile()) throw new Error('Editing source must be a regular file.');
         const hash = await this.digest(file.fd);
         if (hash !== await this.fileDigest(path)) throw new Error('文件在准备编辑副本时发生变化，请重试。');
-        this.documents.set(path, { uri: uri, hash: hash, version: this.version(await fs.stat(file.fd)) });
+        this.documents.set(path, { uri: uri, hash: hash,
+          version: this.version(await fs.stat(file.fd)), directory: directory });
       } finally { await fs.close(file); }
+      prepared = true;
       return uri;
-    } finally { await fs.rmdir(staging); }
+    } finally { if (!prepared) await fs.rmdir(directory); }
+  }
+
+  async release(path: string): Promise<void> {
+    await this.preparing.get(path);
+    await this.synchronize(path);
+    const document = this.documents.get(path);
+    if (!document) return;
+    // Copy final edits back before ArchiveService decides whether to retain its
+    // working file. Never remove an edit that moved during the closing snapshot.
+    if (await fs.access(new fileUri.FileUri(document.uri).path) &&
+        await this.fileDigest(document.uri) !== document.hash) {
+      throw new Error('文件在关闭编辑期间再次发生变化，请重试。');
+    }
+    if (await fs.access(document.directory)) await fs.rmdir(document.directory);
+    this.documents.delete(path);
   }
 
   synchronize(path: string): Promise<boolean> {
@@ -110,7 +119,7 @@ export class ExternalEdits {
         await fs.copyFile(file.fd, output.fd);
         await fs.fsync(output.fd);
       } finally { await fs.close(output); }
-      // A save can replace the public inode while we are copying. Defer a
+      // A save can replace the editing inode while we are copying. Defer a
       // moving snapshot to the next poll instead of publishing partial edits.
       if (await this.fileDigest(staging) !== hash || await this.fileDigest(document.uri) !== hash) return false;
       if (await this.fileDigest(path) !== document.hash) throw new Error('本地编辑文件在同步期间发生变化，请重试。');
