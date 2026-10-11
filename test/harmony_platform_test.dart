@@ -109,6 +109,54 @@ void main() {
       );
 
       test(
+        'external editing copies synchronize before archive change detection',
+        () async {
+          final directory = await Directory.systemTemp.createTemp(
+            'hizip-sync-',
+          );
+          final service = ArchiveService(temporaryRoot: directory.path);
+          try {
+            final source = await File(
+              '${directory.path}/notes.txt',
+            ).writeAsString('first doc');
+            final archive = '${directory.path}/notes.zip';
+            respond((call) async => null);
+            await service.create(archive, [source.path]);
+            final doc = await service.read(archive);
+            final opened = await service.prepareExternal(
+              doc,
+              doc.entries.single,
+            );
+            respond((call) async {
+              if (call.method == 'syncExternalFiles') {
+                expect(call.arguments, {
+                  'paths': [opened.path],
+                });
+                final file = File(opened.path);
+                await file.writeAsString('saved doc');
+                await file.setLastModified(opened.stat.modified);
+                return [opened.path];
+              }
+              return null;
+            });
+            expect(await service.changes(), [opened]);
+            await service.save(opened);
+            final updated = await service.read(archive);
+            expect(
+              String.fromCharCodes(
+                await service.preview(updated, updated.entries.single),
+              ),
+              'saved doc',
+            );
+          } finally {
+            await service.dispose();
+            await directory.delete(recursive: true);
+          }
+        },
+        skip: Platform.environment['HIZIP_NATIVE_LIBRARY'] == null,
+      );
+
+      test(
         'picker returns sandbox paths without converting document URIs',
         () async {
           respond(

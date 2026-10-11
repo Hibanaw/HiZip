@@ -24,42 +24,23 @@ vm.runInNewContext(ts.transpileModule(source, {
   },
 });
 (async () => {
-  const cacheDir = '/data/storage/el2/base/cache';
-  const directory = `${cacheDir}/hizip-abc123/archive-DEF456/file-ghi789`;
-  const filename = `${directory}/中文 document.docx`;
+  const uri = 'file://docs/storage/Users/currentUser/Download/HiZip-edit-123/中文%20document.docx';
   const wants = [];
   const systemFiles = new exportsObject.SystemFiles({
-    cacheDir, startAbility: async want => wants.push(want),
+    startAbility: async want => wants.push(want),
   });
-  await systemFiles.open(filename, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', true, 'system');
-  const edit = wants.pop();
-  assert.equal(edit.uri, fileUri.getUriFromPath(filename));
-  assert.equal(edit.action, 'ohos.want.action.viewData');
-  assert.equal(edit.flags, 3);
-  assert.equal(edit.parameters['ability.params.stream'].length, 2);
-  assert.equal(edit.parameters['ability.params.stream'][0], edit.uri);
-  assert.equal(edit.parameters['ability.params.stream'][1], fileUri.getUriFromPath(directory));
-  // The main URI identifies the document. Its isolated directory is the final
-  // grant, allowing sibling creation and rename without sharing other entries.
-  assert.notEqual(edit.parameters['ability.params.stream'][1], edit.uri);
-  await systemFiles.open(filename, 'application/msword', false, 'system');
-  const read = wants.pop();
-  assert.equal(read.flags, 1);
-  assert.equal(read.parameters, undefined);
-  for (const unsafe of [
-    `${cacheDir}/document.docx`,
-    `${cacheDir}/hizip-abc123/archive-DEF456/document.docx`,
-    '/data/storage/el2/base/files/imports/document.docx',
-    `${cacheDir}-other/hizip-abc123/archive-DEF456/file-ghi789/document.docx`,
-    `${directory}/nested/document.docx`,
-    `${directory}/..`,
-    `${directory}/.`,
-    `${directory}/document\0.docx`,
-  ]) {
-    await systemFiles.open(unsafe, 'application/msword', true, 'system');
-    assert.equal(wants.pop().parameters, undefined, unsafe);
+  for (const writable of [false, true]) {
+    await systemFiles.open(uri, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', writable, 'system');
+    const want = wants.pop();
+    assert.equal(want.uri, uri);
+    assert.equal(want.action, 'ohos.want.action.viewData');
+    assert.equal(want.flags, writable ? 3 : 1);
+    // A stream directory was interpreted by WPS as another document. The only
+    // open object must be the file URI, retaining its filename and suffix.
+    assert.equal(want.parameters, undefined);
+    assert.ok(want.uri.endsWith('.docx'));
   }
-  await assert.rejects(systemFiles.open(filename, 'application/msword', true, 'another-app'));
+  await assert.rejects(systemFiles.open(uri, 'application/msword', true, 'another-app'));
   assert.equal(wants.length, 0);
-  console.log('SystemFiles: editable directory grant, read-only access, 8 isolation cases and invalid application passed.');
+  console.log('SystemFiles: single document URI, filename/suffix, read/write flags and invalid application passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

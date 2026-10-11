@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:hizip/services/app_settings.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:nativeapi/nativeapi.dart';
+import 'package:hizip_native/hizip_native.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -211,6 +212,67 @@ void main() {
     }
   });
 
+  testWidgets('Public DOCX editing copy synchronizes back into the ZIP', (
+    _,
+  ) async {
+    final root = await Directory(
+      await NativePaths.temporaryDirectory(),
+    ).createTemp('hizip-edit-test-');
+    final service = ArchiveService(temporaryRoot: root.path);
+    try {
+      final source = await createTestDocx(
+        root,
+        '中文 文档.docx',
+        'original document',
+      );
+      final archive = p.join(root.path, 'office.zip');
+      await service.create(archive, [source.path]);
+      final doc = await service.read(archive);
+      final opened = await service.prepareExternal(doc, doc.entries.single);
+      final uri = (await NativePlatform.channel.invokeMethod<String>(
+        'prepareExternalFile',
+        {'path': opened.path, 'writable': true},
+      ))!;
+      expect(uri, startsWith('file://docs/'));
+      expect(Uri.decodeComponent(uri.split('/').last), '中文 文档.docx');
+      final imported = await NativeDocuments.importUri(uri);
+      expect(
+        await File(imported.path).readAsBytes(),
+        await source.readAsBytes(),
+      );
+      for (var index = 1; index <= 2; index++) {
+        final revision = await createTestDocx(
+          root,
+          'revision-$index.docx',
+          'saved revision $index',
+        );
+        await NativeDocuments.copyToUri(revision.path, uri);
+        expect(await service.changes(), [opened]);
+        expect(
+          await File(opened.path).readAsBytes(),
+          await revision.readAsBytes(),
+        );
+        await service.save(opened);
+        expect(await service.changes(), isEmpty);
+        final updated = await service.read(archive);
+        expect(
+          await service.preview(updated, updated.entries.single),
+          await revision.readAsBytes(),
+        );
+        expect(
+          await NativePlatform.channel.invokeMethod<String>(
+            'prepareExternalFile',
+            {'path': opened.path, 'writable': true},
+          ),
+          uri,
+        );
+      }
+    } finally {
+      await service.dispose();
+      await root.delete(recursive: true);
+    }
+  });
+
   testWidgets(
     'System directory exports copy folders and reject existing targets',
     (_) async {
@@ -380,4 +442,40 @@ void main() {
     tester.view.resetDevicePixelRatio();
     await tester.binding.setSurfaceSize(null);
   });
+}
+
+Future<File> createTestDocx(Directory root, String name, String text) async {
+  final parts = await root.createTemp('docx-parts-');
+  final contents = {
+    '[Content_Types].xml':
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>',
+    '_rels/.rels':
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>',
+    'word/document.xml':
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>$text</w:t></w:r></w:p></w:body></w:document>',
+  };
+  final inputs = <String>[];
+  for (final entry in contents.entries) {
+    final file = File(p.join(parts.path, entry.key));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(entry.value);
+    inputs.add(file.path);
+  }
+  final output = File(p.join(root.path, name));
+  await NativeArchive.create(
+    '${output.path}.zip',
+    inputs,
+    contents.keys.toList(),
+  );
+  await File('${output.path}.zip').rename(output.path);
+  return output;
 }

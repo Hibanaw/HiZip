@@ -28,14 +28,15 @@ subprocess.run([*command, 'install', '-r', str(hap)], check=True)
 subprocess.run([*command, 'shell', 'aa', 'force-stop', 'com.hibanaw.hizip'], check=True)
 subprocess.run([*command, 'shell', 'hilog', '-r'], check=True, stdout=subprocess.DEVNULL)
 launch = subprocess.run([*command, 'shell', 'aa', 'start', '-a', 'EntryAbility',
-                         '-b', 'com.hibanaw.hizip'], capture_output=True, text=True, check=True)
+                         '-b', 'com.hibanaw.hizip'], capture_output=True, text=True, errors='replace', check=True)
 print(launch.stdout, end='', flush=True)
 if 'start ability successfully' not in launch.stdout:
     sys.exit('The test app did not launch. Check the emulator lock screen and the error above.')
 deadline = time.monotonic() + 45
 uri = None
 while time.monotonic() < deadline:
-    log = subprocess.run([*command, 'shell', 'hilog', '-x'], capture_output=True, text=True, timeout=10).stdout
+    log = subprocess.run([*command, 'shell', 'hilog', '-x'], capture_output=True, text=True,
+                         errors='replace', timeout=10).stdout
     match = re.search(r'(?:Dart VM service|Observatory).*?(http://127\.0\.0\.1:(\d+)/[^\s]+)', log)
     if match:
         uri, remote_port = match.group(1), match.group(2)
