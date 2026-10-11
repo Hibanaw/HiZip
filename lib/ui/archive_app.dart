@@ -1046,17 +1046,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
   }
 
   Future<void> pickArchive() async {
-    final files = await openFiles(
-      acceptedTypeGroups: [
-        XTypeGroup(
-          label: '压缩文件',
-          extensions: readableArchivePickerExtensions,
-          uniformTypeIdentifiers: ['public.data'],
-        ),
-      ],
-    );
-    for (final file in files) {
-      await loadArchive(file.path);
+    try {
+      final files = await openFiles();
+      for (final file in files) {
+        await loadArchive(file.path);
+      }
+    } catch (error) {
+      message('打开压缩包失败：$error', error: true);
     }
   }
 

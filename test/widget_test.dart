@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
@@ -17,11 +18,24 @@ import 'package:hizip/models/browsing_preferences.dart';
 import 'package:hizip/models/theme_accent.dart';
 import 'package:hizip/ui/archive_app.dart';
 import 'package:hizip/ui/file_item_surface.dart';
+import 'package:nativeapi/nativeapi.dart' show NativePlatform;
 
 class TestService extends ArchiveService {
   @override
   Future<Uint8List> preview(ArchiveDocument doc, ArchiveEntry entry) async =>
       Uint8List.fromList('test'.codeUnits);
+}
+
+class PickerService extends ArchiveService {
+  PickerService({required this.readable});
+  final bool readable;
+  final reads = <String>[];
+  @override
+  Future<ArchiveDocument> read(String path) async {
+    reads.add(path);
+    if (!readable) throw const FormatException('Not an archive');
+    return ArchiveDocument(path, const [], 'ZIP', true);
+  }
 }
 
 class QuickLookService extends TestService {
@@ -91,6 +105,88 @@ Future<void> workspace(WidgetTester tester) => tester.pumpWidget(
 );
 
 void main() {
+  for (final outcome in [
+    'cancel',
+    'picker failure',
+    'unsupported file',
+    'unknown suffix',
+  ]) {
+    testWidgets(
+      'archive picker: $outcome',
+      (tester) async {
+        final platforms = TargetPlatform.values.where(
+          (value) => value.name == 'ohos',
+        );
+        debugDefaultTargetPlatformOverride = platforms.single;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        size(tester, const Size(1200, 800));
+        var requests = 0;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          NativePlatform.channel,
+          (call) async {
+            if (call.method != 'openFiles') return null;
+            requests++;
+            expect((call.arguments as Map)['extensions'], isEmpty);
+            if (outcome == 'picker failure') {
+              throw PlatformException(
+                code: 'nativeapi_13900042',
+                message: 'Picker unavailable',
+              );
+            }
+            return outcome == 'cancel' ? <Object?>[] : ['/tmp/document.bin'];
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            NativePlatform.channel,
+            null,
+          ),
+        );
+        final settings = AppSettings(
+          read: () async => null,
+          write: (_) async {},
+        );
+        addTearDown(settings.dispose);
+        final service = PickerService(readable: outcome == 'unknown suffix');
+        await tester.pumpWidget(
+          MaterialApp(
+            builder: foruiBuilder,
+            home: ArchiveWorkspace(
+              enableNativeTransfers: false,
+              desktop: NoMenuBarDesktop(),
+              settings: settings,
+              service: service,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('打开压缩包'));
+        await tester.pumpAndSettle();
+        expect(requests, 1);
+        expect(
+          service.reads,
+          outcome == 'cancel' || outcome == 'picker failure'
+              ? isEmpty
+              : ['/tmp/document.bin'],
+        );
+        final status = find.descendant(
+          of: find.byKey(const ValueKey('workspace-status-bar')),
+          matching: find.textContaining(switch (outcome) {
+            'picker failure' => 'Picker unavailable',
+            'unsupported file' => 'Not an archive',
+            'unknown suffix' => '已打开压缩包：document.bin',
+            _ => '未打开压缩包',
+          }),
+        );
+        expect(status, findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+      },
+      skip: !TargetPlatform.values.any((value) => value.name == 'ohos'),
+    );
+  }
+
   testWidgets('light selected file name and lock icon follow accent contrast', (
     tester,
   ) async {
