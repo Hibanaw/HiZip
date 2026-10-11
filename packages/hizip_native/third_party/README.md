@@ -35,3 +35,22 @@ UnRAR is freeware source with restrictions, not an unrestricted open-source
 compression library. Only decompression is used. Preserve `license.txt` and
 `acknow.txt`; the full license is included in the native package LICENSE and
 Apple resource bundles. Never use these sources to implement RAR compression.
+
+
+## HarmonyOS target codecs
+
+HarmonyOS builds also compile these unmodified official source releases, with
+SHA-256 pins in `../src/ohos_codecs.cmake`:
+
+- XZ/liblzma 5.8.4: https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.xz
+  — `4ce24038fd4221e0d13bc1a2de7a4db56e90b92b3bf75321f6c14be73f65de4b`
+- bzip2 1.0.8: https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+  — `ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269`
+- Mbed TLS 3.6.7: https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+  — `a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6`
+
+The complete upstream license notices remain inside the archives. Only the
+libraries are linked into HiZip; command-line tools and upstream tests are
+disabled. Keep all license notices when redistributing. The liblzma library uses
+the upstream 0BSD license, bzip2 its upstream license, and Mbed TLS is used under
+Apache-2.0.

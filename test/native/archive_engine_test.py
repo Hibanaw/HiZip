@@ -25,6 +25,25 @@ lib.hz_update.restype = ctypes.c_void_p
 lib.hz_update.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_int, ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]
 
 class NativeArchiveTests(unittest.TestCase):
+    def test_capabilities_ignore_and_preserve_operation_encryption(self):
+        lib.hz_configure_security.argtypes = [ctypes.c_char_p] * 3
+        lib.hz_configure_security.restype = None
+        baseline = call('hz_capabilities')
+        self.assertIn('zip', baseline['writableFormats'])
+        try:
+            for password in [b'', b'password']:
+                lib.hz_configure_security(password, b'aes256', b'store')
+                self.assertEqual(call('hz_capabilities'), baseline)
+            if baseline['zipAES256']:
+                source = self.root / 'plain.txt'
+                source.write_text('encrypted data')
+                output = self.root / 'encrypted.zip'
+                paths = (ctypes.c_char_p * 1)(os.fsencode(source))
+                names = (ctypes.c_char_p * 1)(b'plain.txt')
+                self.assertTrue(call('hz_create', output, paths, names, 1).get('ok'))
+                self.assertTrue(call('hz_list', output)['entries'][0]['encrypted'])
+        finally:
+            lib.hz_configure_security(b'', b'none', b'deflate')
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.root = pathlib.Path(self.tmp.name)
         self.zip = self.root / 'sample.zip'
@@ -187,7 +206,7 @@ class NativeArchiveTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertEqual(result['files'], 2)
         self.assertEqual(result['bytes'], len('Hello 世界'.encode()) + 256)
-        self.assertEqual(outputs[0].read_text(), 'Hello 世界')
+        self.assertEqual(outputs[0].read_text(encoding='utf-8'), 'Hello 世界')
         self.assertEqual(outputs[1].read_bytes(), bytes(range(256)))
     def test_batch_aggregate_limit_removes_partial_outputs(self):
         outputs = [self.root / 'a', self.root / 'b']

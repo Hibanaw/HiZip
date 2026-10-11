@@ -162,7 +162,11 @@ HZ_EXPORT void hz_configure_security(const char *password, const char *encryptio
 }
 static int configure_writer(struct archive *, int, int, const char *);
 static int format_for_filename(const char *, int *);
-HZ_EXPORT char *hz_capabilities(void) {
+static char *capabilities_impl(void) {
+  // Capability probes must not inherit encryption from a prior worker operation.
+  char configured_encryption[sizeof(write_encryption)];
+  memcpy(configured_encryption, write_encryption, sizeof(write_encryption));
+  snprintf(write_encryption, sizeof(write_encryption), "none");
   struct archive *w = archive_write_new();
   archive_write_set_format_zip(w);
   int aes = archive_write_set_format_option(w, "zip", "encryption", "aes256") == ARCHIVE_OK;
@@ -179,6 +183,7 @@ HZ_EXPORT char *hz_capabilities(void) {
     archive_write_free(w);
   }
   append(&b, "],\"rarRead\":true,\"rarEncryption\":true,\"rarVolumes\":true}");
+  memcpy(write_encryption, configured_encryption, sizeof(write_encryption));
   return b.s;
 }
 HZ_EXPORT void hz_configure_encoding(const char *read, const char *write, int level) {
@@ -729,6 +734,9 @@ static locale_guard enter_utf8(void) {
 }
 static void leave_utf8(locale_guard g) { if (g.current) { uselocale(g.previous); freelocale(g.current); } }
 #endif
+HZ_EXPORT char *hz_capabilities(void) {
+  locale_guard g = enter_utf8(); char *r = capabilities_impl(); leave_utf8(g); return r;
+}
 HZ_EXPORT char *hz_list(const char *path) {
   locale_guard g = enter_utf8(); char *r = hz_rar_probe(path) ? hz_rar_list(path, read_password, rar_checkpoint) : list_impl(path); leave_utf8(g); return r;
 }
