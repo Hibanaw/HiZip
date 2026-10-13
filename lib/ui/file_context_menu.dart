@@ -122,6 +122,12 @@ class FileContextMenu extends StatefulWidget {
 class _FileContextMenuState extends State<FileContextMenu>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static _FileContextMenuState? opened;
+  // Nested menus (a file row inside the folder's blank-space menu) both see
+  // the same secondary-tap-down. Raw pointer routing visits the innermost
+  // widget first, so track which instance claims a given pointer id first and
+  // let only that one open its menu; the ancestor must not steal it back.
+  static _FileContextMenuState? _secondaryTapClaimedBy;
+  static bool _secondaryTapClaimScheduled = false;
   late final controller = FPopoverController(vsync: this);
   late final FocusScopeNode menuFocus = FocusScopeNode(
     debugLabel: 'archive context menu',
@@ -554,7 +560,13 @@ class _FileContextMenuState extends State<FileContextMenu>
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onSecondaryTapDown: widget.enabled
-              ? (event) => open(event.globalPosition)
+              ? (event) {
+                  if (_secondaryTapClaimedBy != null &&
+                      _secondaryTapClaimedBy != this) {
+                    return;
+                  }
+                  open(event.globalPosition);
+                }
               : null,
           onTapDown:
               widget.triggerBuilder == null &&
@@ -575,6 +587,20 @@ class _FileContextMenuState extends State<FileContextMenu>
                   menuShown &&
                   event.buttons == kPrimaryMouseButton) {
                 close();
+              }
+              if (widget.enabled && event.buttons == kSecondaryMouseButton) {
+                // Raw pointer routing visits the innermost widget first, so a
+                // file row claims this pointer-down before an ancestor
+                // blank-space menu's GestureDetector resolves its own tap
+                // recognizer. Only the first (innermost) menu to see it opens.
+                if (!_secondaryTapClaimScheduled) {
+                  _secondaryTapClaimedBy = this;
+                  _secondaryTapClaimScheduled = true;
+                  scheduleMicrotask(() {
+                    _secondaryTapClaimedBy = null;
+                    _secondaryTapClaimScheduled = false;
+                  });
+                }
               }
               touchDown(event);
             },
