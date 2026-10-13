@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
@@ -5,6 +7,16 @@ import 'package:forui/forui.dart';
 import '../models/selection_highlight.dart';
 import '../models/theme_accent.dart';
 import 'app_localizations.dart';
+
+/// The system UI font family. macOS resolves this name to San Francisco;
+/// other platforms have no such alias, so Windows is given an explicit
+/// family with a CJK-capable fallback chain instead of Skia's generic one.
+final String _uiFontFamily = Platform.isWindows
+    ? 'Segoe UI'
+    : '.AppleSystemUIFont';
+final List<String>? _uiFontFallback = Platform.isWindows
+    ? const ['Microsoft YaHei UI', 'Microsoft YaHei', 'SimSun']
+    : null;
 
 FThemeData _desktopForuiTheme(
   Brightness brightness, {
@@ -17,22 +29,25 @@ FThemeData _desktopForuiTheme(
               : FThemes.neutral.light.desktop.colors)
           .copyWith(primary: accent, primaryForeground: onAccent);
   final typography = FTypography(
-    fontFamily: '.AppleSystemUIFont',
+    fontFamily: _uiFontFamily,
     xs: TextStyle(
       color: colors.foreground,
-      fontFamily: '.AppleSystemUIFont',
+      fontFamily: _uiFontFamily,
+      fontFamilyFallback: _uiFontFallback,
       fontSize: 12,
       height: 1.25,
     ),
     sm: TextStyle(
       color: colors.foreground,
-      fontFamily: '.AppleSystemUIFont',
+      fontFamily: _uiFontFamily,
+      fontFamilyFallback: _uiFontFallback,
       fontSize: 13,
       height: 1.3,
     ),
     md: TextStyle(
       color: colors.foreground,
-      fontFamily: '.AppleSystemUIFont',
+      fontFamily: _uiFontFamily,
+      fontFamilyFallback: _uiFontFallback,
       fontSize: 15,
       height: 1.4,
     ),
@@ -336,7 +351,8 @@ class DesktopTextField extends StatelessWidget {
             if (!enabled) FTextFieldVariant.disabled,
           })
           .copyWith(
-            fontFamily: fontFamily ?? '.AppleSystemUIFont',
+            fontFamily: fontFamily ?? _uiFontFamily,
+            fontFamilyFallback: fontFamily == null ? _uiFontFallback : null,
             fontSize: fontSize,
             height: 1.3,
             leadingDistribution: TextLeadingDistribution.even,
@@ -710,7 +726,8 @@ ThemeData desktopTheme({
     scaffoldBackgroundColor: surface,
     canvasColor: surface,
     cardColor: surface,
-    fontFamily: '.AppleSystemUIFont',
+    fontFamily: _uiFontFamily,
+    fontFamilyFallback: _uiFontFallback,
     visualDensity: VisualDensity.compact,
     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     splashFactory: NoSplash.splashFactory,
