@@ -5,6 +5,7 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
+#include "native_files_channel.h"
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
 
@@ -56,6 +57,8 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   main_archive_window = GetHandle();
+  RegisterNativeFilesChannel(flutter_controller_->engine()->messenger(),
+                            main_archive_window);
   DesktopMultiWindowSetWindowCreatedCallback([](void* controller) {
     auto* view_controller = reinterpret_cast<flutter::FlutterViewController*>(controller);
     RegisterPlugins(view_controller->engine());

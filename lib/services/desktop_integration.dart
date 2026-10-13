@@ -36,10 +36,12 @@ class DesktopIntegration {
   bool get supportsQuickLook => defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsFileIntegration =>
       (defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows);
   bool get supportsDefaultApplication =>
       (defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows);
   final _icons = <String, Future<Uint8List?>>{};
   final _applications = <String, Future<DefaultApplication?>>{};
   final _handlers = <String, Future<List<FileApplication>>>{};
