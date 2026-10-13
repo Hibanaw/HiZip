@@ -37,6 +37,10 @@ Future<void> initializeWindowChrome({int? nativePointer}) async {
   } else if (!Platform.isMacOS) {
     _window!.titleBarStyle = native.TitleBarStyle.hidden;
   }
+  // macOS sets the same minimum in MainFlutterWindow.swift.
+  if (!_secondary && !Platform.isMacOS) {
+    _window!.minimumSize = const Size(390, 500).toNative();
+  }
   _window!.isWindowControlButtonsVisible = _secondary || Platform.isMacOS;
   _enabled = true;
   if (Platform.isLinux && !_secondary) {
