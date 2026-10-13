@@ -6,6 +6,11 @@ set(HIZIP_UNRAR_SOURCES
   options errhnd rarvm secpassword rijndael getbits sha1 sha256 blake2s hash
   extinfo extract volume list find unpack headers threadpool rs16 cmddata ui
   largepage filestr scantree dll qopen)
+if(WIN32)
+  # isnt.cpp and motw.cpp are Windows-only sources; the upstream UNIX makefile
+  # this list is otherwise copied from doesn't build the platform under NT.
+  list(APPEND HIZIP_UNRAR_SOURCES isnt motw)
+endif()
 list(TRANSFORM HIZIP_UNRAR_SOURCES PREPEND "${CMAKE_CURRENT_LIST_DIR}/vendor/unrar/")
 list(TRANSFORM HIZIP_UNRAR_SOURCES APPEND ".cpp")
 add_library(hizip_unrar STATIC ${HIZIP_UNRAR_SOURCES})
