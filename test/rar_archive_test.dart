@@ -17,17 +17,23 @@ void main() {
     expect(readableArchivePickerExtensions, containsAll(['rar', 'r00', 'r99']));
     expect(writableArchiveFormats.containsKey('rar'), false);
     expect(
-      RarVolumes.firstPath('/archives/name.part002.RAR'),
-      '/archives/name.part001.RAR',
-    );
-    expect(RarVolumes.firstPath('/archives/name.r03'), '/archives/name.rar');
-    expect(RarVolumes.firstPath('/archives/name.R99'), '/archives/name.RAR');
-    expect(
-      RarVolumes.firstPath('/archives/ordinary.rar'),
-      '/archives/ordinary.rar',
+      RarVolumes.firstPath(p.join('/archives', 'name.part002.RAR')),
+      p.join('/archives', 'name.part001.RAR'),
     );
     expect(
-      () => RarVolumes.firstPath('/archives/name.part0.rar'),
+      RarVolumes.firstPath(p.join('/archives', 'name.r03')),
+      p.join('/archives', 'name.rar'),
+    );
+    expect(
+      RarVolumes.firstPath(p.join('/archives', 'name.R99')),
+      p.join('/archives', 'name.RAR'),
+    );
+    expect(
+      RarVolumes.firstPath(p.join('/archives', 'ordinary.rar')),
+      p.join('/archives', 'ordinary.rar'),
+    );
+    expect(
+      () => RarVolumes.firstPath(p.join('/archives', 'name.part0.rar')),
       throwsStateError,
     );
   });

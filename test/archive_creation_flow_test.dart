@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:forui/forui.dart';
+import 'package:path/path.dart' as p;
 import 'package:hizip/models/archive_create_options.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/ui/archive_app.dart';
@@ -209,8 +210,9 @@ void main() {
         final data = await screenshot.toByteData(
           format: ui.ImageByteFormat.png,
         );
-        await File('/tmp/hizip-create-dialog.png')
-            .writeAsBytes(data!.buffer.asUint8List());
+        await File(
+          p.join(Directory.systemTemp.path, 'hizip-create-dialog.png'),
+        ).writeAsBytes(data!.buffer.asUint8List());
         screenshot.dispose();
       });
       tester.view.physicalSize = const Size(900, 900);
