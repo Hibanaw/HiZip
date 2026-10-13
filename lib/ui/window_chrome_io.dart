@@ -138,7 +138,24 @@ Widget windowLeadingControls() => _enabled && Platform.isMacOS
     : const SizedBox.shrink();
 
 Widget windowTrailingControls() => _enabled && !Platform.isMacOS
-    ? _WindowControls(window: _window!)
+    ? Platform.isWindows
+        // The toolbar/title bar's Container pads both sides by 8 and
+        // vertically centers its Row; cancel just enough of that here
+        // (paint-only translate for the padding, an explicit height to give
+        // Align room) so the buttons sit flush in the window's true
+        // top-right corner like native caption buttons, keeping their own
+        // native ~32px height rather than stretching into our taller bar.
+        ? Transform.translate(
+            offset: const Offset(8, 0),
+            child: SizedBox(
+              height: windowChromeHeight(),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: _WindowControls(window: _window!),
+              ),
+            ),
+          )
+        : _WindowControls(window: _window!)
     : const SizedBox.shrink();
 
 class _WindowControls extends StatefulWidget {
@@ -149,43 +166,167 @@ class _WindowControls extends StatefulWidget {
 }
 
 class _WindowControlsState extends State<_WindowControls> {
+  void close() {
+    if (_secondary) {
+      (_closeSecondary ?? widget.window.hide)();
+    } else {
+      native.Application.instance.quit(0);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      DesktopIconButton(
-        tooltip: '最小化',
-        icon: const Icon(Icons.remove, size: 16),
-        onPressed: widget.window.minimize,
-      ),
-      DesktopIconButton(
-        tooltip: widget.window.isMaximized ? '还原' : '最大化',
-        icon: Icon(
-          widget.window.isMaximized ? Icons.filter_none : Icons.crop_square,
-          size: 14,
+  Widget build(BuildContext context) {
+    if (Platform.isWindows) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _WindowsCaptionButton(
+            tooltip: '最小化',
+            glyph: _CaptionGlyph.minimize,
+            onPressed: widget.window.minimize,
+          ),
+          _WindowsCaptionButton(
+            tooltip: widget.window.isMaximized ? '还原' : '最大化',
+            glyph: widget.window.isMaximized
+                ? _CaptionGlyph.restore
+                : _CaptionGlyph.maximize,
+            onPressed: () => setState(() {
+              if (widget.window.isMaximized) {
+                widget.window.unmaximize();
+              } else {
+                widget.window.maximize();
+              }
+            }),
+          ),
+          _WindowsCaptionButton(
+            tooltip: '关闭',
+            glyph: _CaptionGlyph.close,
+            isClose: true,
+            onPressed: close,
+          ),
+        ],
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DesktopIconButton(
+          tooltip: '最小化',
+          icon: const Icon(Icons.remove, size: 16),
+          onPressed: widget.window.minimize,
         ),
-        onPressed: () => setState(() {
-          if (widget.window.isMaximized) {
-            widget.window.unmaximize();
-          } else {
-            widget.window.maximize();
-          }
+        DesktopIconButton(
+          tooltip: widget.window.isMaximized ? '还原' : '最大化',
+          icon: Icon(
+            widget.window.isMaximized ? Icons.filter_none : Icons.crop_square,
+            size: 14,
+          ),
+          onPressed: () => setState(() {
+            if (widget.window.isMaximized) {
+              widget.window.unmaximize();
+            } else {
+              widget.window.maximize();
+            }
+          }),
+        ),
+        WindowCloseButton(platform: TargetPlatform.linux, onPressed: close),
+      ],
+    );
+  }
+}
+
+// Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) caption
+// glyphs, the same font the system's own caption buttons render with.
+enum _CaptionGlyph {
+  minimize('\uE921'),
+  maximize('\uE922'),
+  restore('\uE923'),
+  close('\uE8BB');
+
+  const _CaptionGlyph(this.codePoint);
+  final String codePoint;
+}
+
+/// A Windows 11 Fluent-styled caption button (46×32, square corners, light
+/// hover for minimize/maximize, solid red hover for close). HiZip hides the
+/// real title bar on Windows (DWM's own caption buttons stop hit-testing
+/// once that area becomes client-side), so this self-drawn button matches
+/// the native look without being a real system control.
+class _WindowsCaptionButton extends StatefulWidget {
+  const _WindowsCaptionButton({
+    required this.tooltip,
+    required this.glyph,
+    required this.onPressed,
+    this.isClose = false,
+  });
+  final String tooltip;
+  final _CaptionGlyph glyph;
+  final VoidCallback onPressed;
+  final bool isClose;
+  @override
+  State<_WindowsCaptionButton> createState() => _WindowsCaptionButtonState();
+}
+
+class _WindowsCaptionButtonState extends State<_WindowsCaptionButton> {
+  bool hovering = false, pressed = false;
+  // Hover/press alpha follows window_manager: it differs between light and
+  // dark, and the close button ignores the theme in favor of the fixed red.
+  static const _closeHoverColor = Color(0xffc42b1c);
+  static const _closePressedColor = Color(0xe5c42b1c);
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final foreground = Theme.of(context).colorScheme.onSurface;
+    final overlay = dark ? Colors.white : Colors.black;
+    final background = widget.isClose
+        ? pressed
+              ? _closePressedColor
+              : hovering
+              ? _closeHoverColor
+              : Colors.transparent
+        : pressed
+        ? overlay.withValues(alpha: dark ? .0419 : .0241)
+        : hovering
+        ? overlay.withValues(alpha: dark ? .0605 : .0373)
+        : Colors.transparent;
+    final iconColor = widget.isClose && (hovering || pressed)
+        ? Colors.white
+        : foreground;
+    return AppTooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => hovering = true),
+        onExit: (_) => setState(() {
+          hovering = false;
+          pressed = false;
         }),
+        child: GestureDetector(
+          onTapDown: (_) => setState(() => pressed = true),
+          onTapCancel: () => setState(() => pressed = false),
+          onTapUp: (_) => setState(() => pressed = false),
+          onTap: widget.onPressed,
+          child: Container(
+            width: 46,
+            height: 32,
+            color: background,
+            alignment: Alignment.center,
+            child: Text(
+              widget.glyph.codePoint,
+              textScaler: TextScaler.noScaling,
+              style: TextStyle(
+                fontFamily: 'Segoe Fluent Icons',
+                fontFamilyFallback: const ['Segoe MDL2 Assets'],
+                fontSize: 10,
+                height: 1,
+                color: iconColor,
+              ),
+            ),
+          ),
+        ),
       ),
-      WindowCloseButton(
-        platform: Platform.isLinux
-            ? TargetPlatform.linux
-            : TargetPlatform.windows,
-        onPressed: () {
-          if (_secondary) {
-            (_closeSecondary ?? widget.window.hide)();
-          } else {
-            native.Application.instance.quit(0);
-          }
-        },
-      ),
-    ],
-  );
+    );
+  }
 }
 
 Map<String, double> windowFrame() {
