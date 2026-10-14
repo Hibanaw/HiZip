@@ -1,0 +1,61 @@
+name: Windows MSIX
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  msix:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      # Static codec libraries for the vendored libarchive build
+      # (see windows/CMakeLists.txt). Runners ship vcpkg at C:\vcpkg.
+      - name: Install codec libraries
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install zlib liblzma --triplet x64-windows-static
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - run: flutter pub get
+
+      # Optional: store a base64-encoded PFX in MSIX_PFX_BASE64 and its
+      # password in MSIX_PFX_PASSWORD. Without them a self-signed dev
+      # certificate is generated (installable only after trusting it).
+      - name: Build MSIX
+        shell: pwsh
+        env:
+          MSIX_PFX_BASE64: ${{ secrets.MSIX_PFX_BASE64 }}
+          MSIX_PFX_PASSWORD: ${{ secrets.MSIX_PFX_PASSWORD }}
+        run: |
+          if ($env:MSIX_PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'hizip.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:MSIX_PFX_BASE64))
+            ./scripts/build_msix.ps1 -Pfx $pfx -PfxPassword $env:MSIX_PFX_PASSWORD
+          } else {
+            ./scripts/build_msix.ps1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hizip-msix
+          path: |
+            build/windows/x64/runner/hizip.msix
+            build/hizip-dev.cer
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/windows/x64/runner/hizip.msix
+            build/hizip-dev.cer

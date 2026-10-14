@@ -29,6 +29,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  msix: ^3.18.0
 
 dependency_overrides:
   cnativeapi:
@@ -36,3 +37,14 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+
+msix_config:
+  display_name: HiZip
+  publisher_display_name: Hibanaw
+  identity_name: dev.hizip.HiZip
+  publisher: CN=Hibanaw
+  msix_version: 0.1.0.0
+  logo_path: assets/branding/hizip-app-icon-square.png
+  languages: zh-cn, en-us
+  install_certificate: false
+  file_extension: .zip, .7z, .rar, .tar, .gz
