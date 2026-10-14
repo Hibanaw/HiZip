@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "native_files_channel.cc"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -34,6 +35,12 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# native_files_channel.cc: GDI+ (icon-to-PNG), Shlwapi/Shell32 (file
+# association queries and the jumbo-icon system image list) and Version
+# (executable display names), and Comdlg32 for the "choose application" file
+# picker.
+target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib" "shlwapi.lib"
+  "version.lib" "comdlg32.lib" "comctl32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

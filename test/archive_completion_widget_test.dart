@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hizip/models/archive_create_options.dart';
 import 'package:hizip/services/archive_service.dart';
 import 'package:hizip/ui/app_localizations.dart';
+import 'package:path/path.dart' as p;
 import 'package:hizip/ui/archive_security_dialogs.dart';
 import 'package:hizip/ui/desktop_widgets.dart';
 import 'package:hizip/ui/extraction_options_dialog.dart';
@@ -83,8 +84,12 @@ void main() {
             final data = await screenshot.toByteData(
               format: ui.ImageByteFormat.png,
             );
-            await File('/tmp/hizip-create-${brightness.name}.png')
-                .writeAsBytes(data!.buffer.asUint8List());
+            await File(
+              p.join(
+                Directory.systemTemp.path,
+                'hizip-create-${brightness.name}.png',
+              ),
+            ).writeAsBytes(data!.buffer.asUint8List());
             screenshot.dispose();
           });
         }

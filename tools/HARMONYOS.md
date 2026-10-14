@@ -1,6 +1,6 @@
 # 鸿蒙开发与构建
 
-`ohos` 分支包含 HarmonyOS `2in1` 工程，包名为 `dev.hizip.hizip`。平台功能由仓库内维护的 [`nativeapi`](../packages/nativeapi/README.md) Flutter 插件实现，原生压缩引擎通过 entry 模块的 CMake 构建。
+`ohos` 分支包含 HarmonyOS 工程，包名为 `com.hibanaw.hizip`，支持 2in1、平板和手机。平台功能由仓库内维护的 [`nativeapi`](../packages/nativeapi/README.md) Flutter 插件实现，原生压缩引擎通过 entry 模块的 CMake 构建。当前平台行为、测试流程和限制见 [HarmonyOS 实现说明](../docs/HARMONYOS.md)。
 
 ## 已验证环境
 
@@ -46,7 +46,7 @@ ForUI 0.21.3 的两处平台枚举分支未覆盖 `ohos`。包装脚本会下载
 ```sh
 hdc tconn 192.168.10.184:42447
 hdc -t 192.168.10.184:42447 install build/ohos/hap/entry-default-signed.hap
-hdc -t 192.168.10.184:42447 shell aa start -b dev.hizip.hizip -a EntryAbility
+hdc -t 192.168.10.184:42447 shell aa start -b com.hibanaw.hizip -a EntryAbility
 ```
 
 `hdc` 位于 SDK 的 `default/openharmony/toolchains/`。无线地址与端口可能随设备重新启用调试而变化。
@@ -55,23 +55,25 @@ hdc -t 192.168.10.184:42447 shell aa start -b dev.hizip.hizip -a EntryAbility
 
 - 使用系统文档选择器打开文件、选择保存位置和解压目标。
 - 选择的文件先复制到应用沙箱，压缩引擎仅处理本地路径，公开文档 URI 留在 ArkTS 层。
-- 压缩包修改发生在沙箱副本中；使用工具栏“保存副本”导出。当前不会自动覆盖最初选择的公开文件。
+- 压缩包修改发生在沙箱工作副本中，验证成功后自动写回获授权的系统源文件；写回前检查源文件摘要，避免覆盖其他应用的修改。只有读授权时保持只读，可使用“保存副本”导出。
 - 新建压缩包和解压操作完成后，将结果复制到授权的公开位置。
 - 应用设置通过 HarmonyOS Preferences 保存，缓存通过原生接口获取。
 - 支持窗口控制的设备隐藏系统标题栏，保留系统最小化、最大化/还原与关闭按钮；通过 49vp 装饰高度使按钮与 Flutter 工具栏居中对齐，并按实际按钮矩形预留空间。工具栏提供拖动、双击最大化/还原，系统关闭按钮等待后台任务与缓存清理完成；隐藏标题栏失败时保留系统装饰。
-- 压缩包内文件“打开”调用系统默认应用；未配置默认项时由系统选择可用应用。外部编辑器就地修改缓存文件后，可检测并写回可写压缩包的沙箱副本；“保存副本”用于导出到公开位置。
+- 压缩包内文件“打开”调用系统默认应用；未配置默认项时由系统选择可用应用。外部编辑使用保留文件名及后缀的独立私有目录，修改经确认后写回归档并同步系统源文件。关闭时同步最后的修改，再清理可安全删除的编辑副本。
 - 桌面文件剪贴板、跨应用拖拽、Quick Look 与 macOS 文件关联尚未移植。
 
-当前鸿蒙原生构建包含 zlib，已验证 ZIP 的创建、读取、预览、解压与更新。bzip2、lzma 和 zstd 的交叉编译依赖尚未补齐，因此不能保证所有 7z、xz 等格式的编解码能力。公开目录导出与系统选择器的完整交互流程仍需进一步真机验收。
+鸿蒙原生构建包含 zlib，并从固定源码交叉编译 bzip2、XZ/liblzma 和 Mbed TLS。已验证 ZIP、7z、XZ、BZip2、ZIP AES-256 与加密固实 RAR5。其他算法仍以运行时能力查询为准。系统选择器的实际点击与公共目录批量合并、覆盖及链接导出仍有验收或实现限制，详见实现说明。
 
 ## 验证
 
-本轮静态分析通过，启用宿主原生引擎后的 128 项测试全部通过。签名 Release 包可安装并启动。真机自检九项全部通过：ZIP 创建、中文文件名、工作 isolate 预览、解压、更新、原生设置存储与删除、运行时能力查询、窗口尺寸读取。插件由 Flutter 自动注册。
+最初迁移时，静态分析及启用宿主原生引擎后的 128 项测试通过，签名 Release 包可安装并启动。后续已补充系统源文件写回、外部编辑和图标回归；最新迁移记录见实现说明。插件由 Flutter 自动注册。
 
 ```sh
-tools/flutter-ohos analyze --no-pub
+tools/flutter-ohos analyze --no-pub lib test integration_test \
+  packages/hizip_native packages/nativeapi/lib packages/nativeapi/test
 # 使用已构建的宿主原生库执行完整原生回归：
-HIZIP_NATIVE_LIBRARY=/path/to/libhizip_native.dylib tools/flutter-ohos test
+HIZIP_NATIVE_LIBRARY=/path/to/libhizip_native.dylib \
+  tools/flutter-ohos test --no-pub test packages/nativeapi/test
 # 构建真机自检入口，安装、启动后通过 HiLog 查看 HIZIP_DEVICE_SMOKE：
 tools/flutter-ohos build hap --debug -t integration_test/ohos_native_smoke.dart
 ```

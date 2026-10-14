@@ -95,6 +95,7 @@ void main() {
           expect(call.method, 'saveLocation');
           expect(call.arguments, {
             'name': 'Archive.zip',
+            'initialDirectory': null,
             'extensions': ['zip', '7z'],
           });
           return null;
@@ -131,7 +132,12 @@ void main() {
           respond(
             (call) => switch (call.method) {
               'openDirectory' => '/sandbox/imports/source',
-              'directoryLocation' => '/sandbox/imports/staging',
+              'directoryLocation' => {
+                'workingPath': '/sandbox/imports/staging',
+                'uri': 'file://docs/storage/Users/currentUser/Documents',
+                'displayPath': '/storage/Users/currentUser/Documents',
+                'writable': true,
+              },
               _ => throw StateError('Unexpected method ${call.method}'),
             },
           );
@@ -143,7 +149,12 @@ void main() {
             await NativeDocuments.getDirectoryPath(),
             '/sandbox/imports/staging',
           );
-          expect(calls.every((call) => call.arguments == null), isTrue);
+          expect(
+            NativeDocuments.displayPath('/sandbox/imports/staging'),
+            '/storage/Users/currentUser/Documents',
+          );
+          expect(calls.first.arguments, isNull);
+          expect(calls.last.arguments, {'initialDirectory': null});
         },
       );
       test(

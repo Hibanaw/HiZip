@@ -758,6 +758,14 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     });
   }
 
+  void toggleSearch() {
+    if (compactSearchOpen) {
+      closeCompactSearch();
+    } else {
+      openSearch();
+    }
+  }
+
   Future<void> addFiles({bool directory = false}) async {
     try {
       final paths = directory
@@ -3300,10 +3308,6 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       child: Column(
                         children: [
                           toolbar(desktopLayout),
-                          if (desktopLayout &&
-                              compactSearchOpen &&
-                              document != null)
-                            desktopSearchBar(),
                           Expanded(
                             child: Scaffold(
                               key: contentScaffold,
@@ -3792,7 +3796,14 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     },
     touchDragLabel: entry.name,
     child: Listener(
-      onPointerDown: (_) => pointerSelectedItem = true,
+      // Only a primary click is the kind of gesture browser()'s outer onTap
+      // can consume. Setting this for other buttons (e.g. a right-click that
+      // opens the file's context menu) left it stuck true with no primary
+      // tap ever firing to clear it, so the next blank-space click silently
+      // no-opped instead of clearing the selection.
+      onPointerDown: (event) {
+        if (event.buttons == kPrimaryMouseButton) pointerSelectedItem = true;
+      },
       child: child,
     ),
   );
@@ -4615,21 +4626,24 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 if (!desktop.supportsMenuBar) applicationMenu(),
                 Expanded(
                   child: !desktopLayout && compactSearchOpen && document != null
-                      ? CallbackShortcuts(
-                          bindings: {
-                            const SingleActivator(LogicalKeyboardKey.escape):
-                                closeCompactSearch,
-                          },
-                          child: Row(
-                            children: [
-                              Expanded(child: searchField()),
-                              const SizedBox(width: 8),
-                              tool(
-                                '关闭搜索',
-                                CupertinoIcons.xmark,
-                                closeCompactSearch,
-                              ),
-                            ],
+                      ? TapRegion(
+                          groupId: 'archive-search',
+                          child: CallbackShortcuts(
+                            bindings: {
+                              const SingleActivator(LogicalKeyboardKey.escape):
+                                  closeCompactSearch,
+                            },
+                            child: Row(
+                              children: [
+                                Expanded(child: searchField()),
+                                const SizedBox(width: 8),
+                                tool(
+                                  '关闭搜索',
+                                  CupertinoIcons.xmark,
+                                  closeCompactSearch,
+                                ),
+                              ],
+                            ),
                           ),
                         )
                       : Row(
@@ -4675,12 +4689,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               ),
                             if (document != null) ...[
                               const SizedBox(width: 8),
-                              tool(
-                                '搜索',
-                                FIcons.search,
-                                openSearch,
-                                active:
-                                    compactSearchOpen || search.text.isNotEmpty,
+                              TapRegion(
+                                groupId: 'archive-search',
+                                child: tool(
+                                  '搜索',
+                                  FIcons.search,
+                                  toggleSearch,
+                                  active:
+                                      compactSearchOpen ||
+                                      search.text.isNotEmpty,
+                                ),
                               ),
                               const SizedBox(width: 8),
                             ],
@@ -4696,23 +4714,21 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     },
   );
 
-  Widget desktopSearchBar() => Container(
+  Widget desktopSearchBar() => FCard.raw(
     key: const ValueKey('workspace-search-bar'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-    decoration: BoxDecoration(
-      color: context.theme.colors.muted,
-      border: Border(bottom: BorderSide(color: context.theme.colors.border)),
-    ),
-    child: CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): closeCompactSearch,
-      },
-      child: Row(
-        children: [
-          Expanded(child: searchField()),
-          const SizedBox(width: 8),
-          tool('关闭搜索', CupertinoIcons.xmark, closeCompactSearch),
-        ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): closeCompactSearch,
+        },
+        child: Row(
+          children: [
+            Expanded(child: searchField()),
+            const SizedBox(width: 8),
+            tool('关闭搜索', CupertinoIcons.xmark, closeCompactSearch),
+          ],
+        ),
       ),
     ),
   );
@@ -4874,6 +4890,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     child: DesktopTextField(
       controller: search,
       focusNode: searchFocus,
+      groupId: 'archive-search',
       onTapOutside: (_) => closeCompactSearch(),
       hint: translateAppText('搜索', settings.locale.languageCode),
       prefix: Padding(
@@ -6398,7 +6415,22 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               right: 8,
               bottom: 36,
               width: (bounds.maxWidth - 16).clamp(0.0, 360.0),
-              child: taskQueuePanel(),
+              child: TapRegion(
+                groupId: 'task-queue',
+                onTapOutside: (_) => setState(() => queueExpanded = false),
+                child: taskQueuePanel(),
+              ),
+            )
+          else if (desktopLayout && compactSearchOpen && document != null)
+            Positioned(
+              top: windowChromeHeight(),
+              right: 8,
+              width: (bounds.maxWidth - 16).clamp(0.0, 360.0),
+              child: TapRegion(
+                groupId: 'archive-search',
+                onTapOutside: (_) => closeCompactSearch(),
+                child: desktopSearchBar(),
+              ),
             ),
         ],
       ),
@@ -6632,15 +6664,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
             ),
           ],
           const SizedBox(width: 8),
-          DesktopButton(
-            key: const ValueKey('task-queue-toggle'),
-            flat: true,
-            minHeight: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            onPressed: () => setState(() => queueExpanded = !queueExpanded),
-            child: AppText(
-              '队列 (${tasks.length})',
-              style: const TextStyle(fontSize: 11),
+          TapRegion(
+            groupId: 'task-queue',
+            child: DesktopButton(
+              key: const ValueKey('task-queue-toggle'),
+              flat: true,
+              minHeight: 24,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              onPressed: () => setState(() => queueExpanded = !queueExpanded),
+              child: AppText(
+                '队列 (${tasks.length})',
+                style: const TextStyle(fontSize: 11),
+              ),
             ),
           ),
           if (document != null)

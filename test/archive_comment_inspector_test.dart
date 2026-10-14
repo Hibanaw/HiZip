@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:path/path.dart' as p;
 import 'package:hizip/services/task_windows.dart';
 import 'package:hizip/models/archive_properties.dart';
 import 'package:flutter/rendering.dart';
@@ -476,8 +477,9 @@ void main() {
           final data = await screenshot.toByteData(
             format: ui.ImageByteFormat.png,
           );
-          await File('/tmp/hizip-comment-$view.png')
-              .writeAsBytes(data!.buffer.asUint8List());
+          await File(
+            p.join(Directory.systemTemp.path, 'hizip-comment-$view.png'),
+          ).writeAsBytes(data!.buffer.asUint8List());
           screenshot.dispose();
         });
         await tester.pumpWidget(const SizedBox());

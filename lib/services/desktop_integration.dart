@@ -38,12 +38,14 @@ class DesktopIntegration {
   bool get supportsFileIntegration =>
       (NativePlatform.isHarmonyOS ||
       defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows);
   bool get supportsApplicationSelection =>
       supportsFileIntegration && !NativePlatform.isHarmonyOS;
   bool get supportsDefaultApplication =>
       (defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.linux);
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.windows);
   final _icons = <String, Future<Uint8List?>>{};
   final _applications = <String, Future<DefaultApplication?>>{};
   final _handlers = <String, Future<List<FileApplication>>>{};

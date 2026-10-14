@@ -240,6 +240,14 @@ static int configure_writer(struct archive *w, int format, int filter, const cha
     rc = archive_write_set_format_option(w, "zip", "hdrcharset", charset);
     if (rc != ARCHIVE_OK) return rc;
   }
+  // Without an explicit header charset, libarchive on Windows converts names,
+  // uname and gname through the OEM code page and fails on entries that carry
+  // no user/group name ("Can't translate gname '(null)' to current locale").
+  if ((format & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_TAR ||
+      (format & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_CPIO) {
+    rc = archive_write_set_format_option(w, NULL, "hdrcharset", "UTF-8");
+    if (rc != ARCHIVE_OK) return rc;
+  }
   if ((format & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_ZIP ||
       (format & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_7ZIP) {
     char level[2] = {(char)('0' + compression_level), 0};

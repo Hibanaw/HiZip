@@ -24,7 +24,7 @@ class FinderCompressionRequest {
       throw const FormatException('Invalid Finder selection');
     }
     return FinderCompressionRequest(
-      paths: paths.cast<String>().map(p.normalize).toSet().toList(),
+      paths: paths.cast<String>().map(p.posix.normalize).toSet().toList(),
       quickZip: arguments['action'] == 'quickZip',
     );
   }

@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
 enum ThemeAccent {
-  // Base colors sampled from the supplied accent palette, in reference order.
+  // Base colors sampled from the supplied accent palette; the default orange
+  // is listed first.
+  orange('橙色', Color(0xfff7821b)),
   blue('蓝色', Color(0xff007aff)),
   purple('紫色', Color(0xff953d96)),
   rose('粉色', Color(0xfff74f9e)),
   red('红色', Color(0xffe0383e)),
-  orange('橙色', Color(0xfff7821b)),
   yellow('黄色', Color(0xffffc726)),
   green('绿色', Color(0xff62ba46)),
   gray('灰色', Color(0xff989898));

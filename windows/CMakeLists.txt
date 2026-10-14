@@ -1,5 +1,19 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+
+# Let CMake's find_package(ZLIB)/find_package(LibLZMA) (used by the vendored
+# libarchive build in packages/hizip_native) discover libraries installed via
+# vcpkg when the VCPKG_ROOT environment variable points at a vcpkg checkout.
+# Must be set before project(). The static triplet
+# matches this project's own static-linking approach (archive_static,
+# LIBARCHIVE_STATIC): it avoids having to ship extra DLLs (zlib1.dll etc.)
+# alongside the app.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    CACHE STRING "Vcpkg toolchain file")
+  set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "Vcpkg triplet")
+endif()
+
 project(hizip LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
