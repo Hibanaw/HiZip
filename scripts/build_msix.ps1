@@ -16,6 +16,15 @@ param(
   [switch]$Store
 )
 $ErrorActionPreference = 'Stop'
+# Surface the failure as a workflow annotation: CI logs are not readable without
+# a token, but annotations are public.
+trap {
+  if ($env:GITHUB_ACTIONS) {
+    $msg = "$($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)" -replace "`r?`n", '%0A'
+    Write-Host "::error::$msg"
+  }
+  break
+}
 if ($Store) {
   if (-not $IdentityName) { $IdentityName = 'Hibanaw.HiZip' }
   if (-not $Publisher) { $Publisher = 'CN=0B04E7E3-18BF-4700-A7E5-F525D1698514' }
