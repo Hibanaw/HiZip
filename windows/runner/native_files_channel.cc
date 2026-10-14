@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "compress_request.h"
 #include "utils.h"
 
 // Windows implementation of the com.hibanaw.hizip/native_files channel's file-icon
@@ -287,6 +288,15 @@ std::vector<std::wstring> AssociatedApplicationPaths(
 
 std::unique_ptr<flutter::MethodChannel<EncodableValue>> g_channel;
 
+EncodableValue CompressRequestValue(const CompressRequest& request) {
+  EncodableList paths;
+  for (const auto& path : request.paths) paths.push_back(EncodableValue(path));
+  return EncodableValue(EncodableMap{
+      {EncodableValue("action"), EncodableValue(request.action)},
+      {EncodableValue("paths"), EncodableValue(paths)},
+  });
+}
+
 void HandleMethodCall(
     const flutter::MethodCall<EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
@@ -371,10 +381,28 @@ void HandleMethodCall(
     return;
   }
 
+  if (method == "initialCompressRequest") {
+    const auto request = TakePendingCompressRequest();
+    if (request) {
+      result->Success(CompressRequestValue(*request));
+    } else {
+      result->Success();
+    }
+    return;
+  }
+
   result->NotImplemented();
 }
 
 }  // namespace
+
+void DeliverCompressRequest(const CompressRequest& request) {
+  if (g_channel) {
+    g_channel->InvokeMethod(
+        "compressFiles",
+        std::make_unique<EncodableValue>(CompressRequestValue(request)));
+  }
+}
 
 void RegisterNativeFilesChannel(flutter::BinaryMessenger* messenger,
                                 HWND owner) {

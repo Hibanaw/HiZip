@@ -63,6 +63,28 @@ class _SettingsPageState extends State<SettingsPage>
   String section = 'appearance';
   bool associating = false;
   String? associationResult;
+
+  Future<void> setExplorerMenu(bool installed) async {
+    try {
+      final modern = await DesktopIntegration().setExplorerMenuInstalled(
+        installed,
+        createLabel: appText(context, '创建压缩包'),
+        quickZipLabel: appText(context, '快速创建 ZIP'),
+      );
+      if (mounted) {
+        setState(
+          () => associationResult = !installed
+              ? '已移除右键菜单'
+              : modern
+              ? '已启用右键菜单'
+              : '已启用传统右键菜单，位于“显示更多选项”',
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => associationResult = '设置失败：$error');
+    }
+  }
+
   bool get appearance => section == 'appearance';
 
   Widget encodingPicker({
@@ -461,7 +483,10 @@ class _SettingsPageState extends State<SettingsPage>
                                             if (mounted) {
                                               setState(
                                                 () => associationResult =
-                                                    '已设为默认打开方式',
+                                                    DesktopIntegration()
+                                                        .supportsExplorerMenu
+                                                    ? '请在系统“默认应用”中为压缩包格式选择 HiZip'
+                                                    : '已设为默认打开方式',
                                               );
                                             }
                                           } catch (error) {
@@ -505,6 +530,38 @@ class _SettingsPageState extends State<SettingsPage>
                                     },
                                     child: const AppText('管理 Finder 扩展'),
                                   ),
+                                ],
+                                if (DesktopIntegration()
+                                    .supportsExplorerMenu) ...[
+                                  const SizedBox(height: 24),
+                                  const AppText('资源管理器右键菜单'),
+                                  const SizedBox(height: 10),
+                                  const AppText(
+                                    '启用后，可在文件和文件夹的右键菜单中创建压缩包或快速创建 ZIP。',
+                                  ),
+                                  const SizedBox(height: 12),
+                                  if (DesktopIntegration().isPackaged)
+                                    const AppText(
+                                      '右键菜单已随应用安装，卸载应用时自动移除。',
+                                      style: TextStyle(fontSize: 12),
+                                    )
+                                  else
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        DesktopButton(
+                                          onPressed: () =>
+                                              setExplorerMenu(true),
+                                          child: const AppText('启用右键菜单'),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        DesktopButton(
+                                          onPressed: () =>
+                                              setExplorerMenu(false),
+                                          child: const AppText('移除右键菜单'),
+                                        ),
+                                      ],
+                                    ),
                                 ],
                                 if (associationResult != null)
                                   Padding(

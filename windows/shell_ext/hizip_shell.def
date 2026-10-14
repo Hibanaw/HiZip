@@ -1,0 +1,4 @@
+LIBRARY hizip_shell
+EXPORTS
+  DllGetClassObject PRIVATE
+  DllCanUnloadNow PRIVATE

@@ -128,6 +128,18 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_COPYDATA: {
+      // Selection forwarded by an Explorer context-menu launch.
+      CompressRequest request;
+      if (ParseCompressCopyData(reinterpret_cast<COPYDATASTRUCT*>(lparam),
+                                &request)) {
+        if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        DeliverCompressRequest(request);
+        return TRUE;
+      }
+      break;
+    }
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
