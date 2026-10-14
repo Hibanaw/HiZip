@@ -122,9 +122,16 @@ node tools/tests/external-edits.test.cjs
 新增鸿蒙搜索/右键测试及插件测试共 29 项、原生归档测试 20 项与 RAR 测试 11 项
 全部通过，两组 Node 主机服务回归通过。API 26 的无签名 Debug HAP 和本机开发
 签名 Release HAP 均构建成功。Release 产物保存在
-`build/ohos/migration/HiZip-ohos-release.hap`。本轮没有连接真机，已有 API 21
+`build/ohos/migration/HiZip-ohos-release.hap`。最初构建验收时尚未连接真机，已有 API 21
 模拟器因磁盘空间不足无法启动，因此没有重跑 HAP 集成测试或 WPS 交互验收；
 2026-10-11 的设备结果属于先前版本的验证。
+
+随后于同日连接用户平板 `XYAO-W00`（API 24），在解锁状态下运行签名测试 HAP，
+`integration_test/ohos_archive_test.dart` 的 13 项真机集成测试全部通过：主机服务、
+中文 ZIP 预览/重命名/提取、系统文件写回与冲突保护、私有 DOCX 连续保存及清理、
+公共目录导出、ZIP AES-256、7z/TAR.xz/TAR.bz2/XZ/BZip2、加密固实 RAR5、
+创建和设置对话框。测试完成后已重新安装并成功启动正式版 Release HAP。
+本次没有重跑第三方 WPS 交互验收。
 
 ## API 依据
 
