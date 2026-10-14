@@ -419,6 +419,8 @@ class _FileContextMenuState extends State<FileContextMenu>
                   widget.onChooseApplication != null)
                 FSubmenuItem(
                   title: const AppText('其他应用'),
+                  submenuAnchor: AlignmentDirectional.topStart,
+                  itemAnchor: AlignmentDirectional.topEnd,
                   submenu: externalAppItems(),
                   submenuStyle: boundedMenuStyle,
                   submenuMaxHeight: menuViewport.height,
@@ -436,6 +438,10 @@ class _FileContextMenuState extends State<FileContextMenu>
         )
       : FSubmenuItem(
           title: AppText(action.title),
+          // Cascade beside the parent on touch platforms too; Forui otherwise
+          // centers the submenu above its item, overlapping the parent menu.
+          submenuAnchor: AlignmentDirectional.topStart,
+          itemAnchor: AlignmentDirectional.topEnd,
           enabled: action.enabled,
           submenu: actionGroups(action.children!),
           submenuStyle: boundedMenuStyle,
@@ -476,6 +482,8 @@ class _FileContextMenuState extends State<FileContextMenu>
             if (widget.onOpenInHiZip != null || widget.onOpenWith != null)
               FSubmenuItem(
                 title: const AppText('打开方式'),
+                submenuAnchor: AlignmentDirectional.topStart,
+                itemAnchor: AlignmentDirectional.topEnd,
                 submenu: appItems(),
                 submenuStyle: boundedMenuStyle,
                 submenuMaxHeight: menuViewport.height,
