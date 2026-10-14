@@ -63,7 +63,7 @@ bool FlutterWindow::OnCreate() {
     auto* view_controller = reinterpret_cast<flutter::FlutterViewController*>(controller);
     RegisterPlugins(view_controller->engine());
     auto channel = std::make_shared<flutter::MethodChannel<flutter::EncodableValue>>(
-      view_controller->engine()->messenger(), "dev.hizip/task-window-host", &flutter::StandardMethodCodec::GetInstance());
+      view_controller->engine()->messenger(), "com.hibanaw.hizip/task-window-host", &flutter::StandardMethodCodec::GetInstance());
     channel->SetMethodCallHandler([view_controller, channel](const auto& call, auto result) {
       const HWND host = GetAncestor(view_controller->view()->GetNativeWindow(), GA_ROOT);
       if (call.method_name() == "nativePointer") {

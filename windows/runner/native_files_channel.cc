@@ -24,7 +24,7 @@
 
 #include "utils.h"
 
-// Windows implementation of the dev.hizip/native_files channel's file-icon
+// Windows implementation of the com.hibanaw.hizip/native_files channel's file-icon
 // and open-with/default-application methods, mirroring macOS's
 // HizipNativePlugin.swift (NSWorkspace/UTType) and Linux's
 // my_application.cc (GTK/gio).
@@ -380,7 +380,7 @@ void RegisterNativeFilesChannel(flutter::BinaryMessenger* messenger,
                                 HWND owner) {
   g_owner = owner;
   g_channel = std::make_unique<flutter::MethodChannel<EncodableValue>>(
-      messenger, "dev.hizip/native_files",
+      messenger, "com.hibanaw.hizip/native_files",
       &flutter::StandardMethodCodec::GetInstance());
   g_channel->SetMethodCallHandler(
       [](const auto& call, auto result) {

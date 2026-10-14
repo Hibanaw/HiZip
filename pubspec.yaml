@@ -41,7 +41,7 @@ flutter:
 msix_config:
   display_name: HiZip
   publisher_display_name: Hibanaw
-  identity_name: dev.hizip.HiZip
+  identity_name: com.hibanaw.hizip
   publisher: CN=Hibanaw
   msix_version: 0.1.0.0
   logo_path: assets/branding/hizip-app-icon-square.png
