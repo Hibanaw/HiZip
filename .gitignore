@@ -50,3 +50,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Signing certificates and packaged output
+*.pfx
+*.cer
+*.msix
