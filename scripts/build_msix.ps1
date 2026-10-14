@@ -44,13 +44,16 @@ $out = "$root\build\windows\x64\runner\hizip.msix"
 flutter build windows --release
 if ($LASTEXITCODE) { throw 'flutter build windows failed' }
 
-# Writes AppxManifest.xml/assets; packing is redone below because the msix
+# Writes AppxManifest.xml/assets (msix:build never packs or deletes them); packing is done below because the msix
 # package's bundled makeappx.exe fails on some machines.
 $ErrorActionPreference = 'Continue'
-dart run msix:create *> $null
+$createLog = dart run msix:build --build-windows false *>&1 | Out-String
 $ErrorActionPreference = 'Stop'
 $manifestPath = "$release\AppxManifest.xml"
-if (-not (Test-Path $manifestPath)) { throw 'AppxManifest.xml was not generated' }
+if (-not (Test-Path $manifestPath)) {
+  $tail = ($createLog -split "`n" | Select-Object -Last 30) -join '%0A'
+  throw "AppxManifest.xml was not generated%0A$tail"
+}
 if (-not (Test-Path "$release\hizip_shell.dll")) { throw 'hizip_shell.dll missing from the release build' }
 # Only used by the unpackaged sparse-package registration.
 Remove-Item "$release\shell_package" -Recurse -Force -ErrorAction SilentlyContinue
