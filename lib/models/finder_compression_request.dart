@@ -18,13 +18,17 @@ class FinderCompressionRequest {
         paths.any(
           (path) =>
               path is! String ||
-              !p.posix.isAbsolute(path) ||
+              !(p.posix.isAbsolute(path) || p.windows.isAbsolute(path)) ||
               path.contains('\u0000'),
         )) {
       throw const FormatException('Invalid Finder selection');
     }
+    // Explorer sends drive or UNC paths; Finder sends POSIX paths.
+    String normalize(String path) => p.posix.isAbsolute(path)
+        ? p.posix.normalize(path)
+        : p.windows.normalize(path);
     return FinderCompressionRequest(
-      paths: paths.cast<String>().map(p.posix.normalize).toSet().toList(),
+      paths: paths.cast<String>().map(normalize).toSet().toList(),
       quickZip: arguments['action'] == 'quickZip',
     );
   }

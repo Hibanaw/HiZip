@@ -65,6 +65,8 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
+add_subdirectory("shell_ext")
+add_dependencies(${BINARY_NAME} hizip_shell)
 
 
 # Generated plugin build rules, which manage building the plugins and adding
@@ -88,6 +90,17 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
+
+install(TARGETS hizip_shell RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/shell_ext/AppxManifest.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../assets/branding/hizip-app-icon-square.png"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/shell_package" COMPONENT Runtime)
+install(CODE "
+  file(RENAME \"${CMAKE_INSTALL_PREFIX}/shell_package/hizip-app-icon-square.png\"
+    \"${CMAKE_INSTALL_PREFIX}/shell_package/logo.png\")
+  " COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

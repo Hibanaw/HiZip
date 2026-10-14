@@ -50,7 +50,7 @@ class AppDelegate: FlutterAppDelegate {
     NSApp.activate(ignoringOtherApps: true)
     deliveringCompression = true
     let request = pendingCompression.removeFirst()
-    let channel = FlutterMethodChannel(name: "dev.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
+    let channel = FlutterMethodChannel(name: "com.hibanaw.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
     channel.invokeMethod("compressFiles", arguments: request.arguments) { [weak self] result in
       if let error = result as? FlutterError { NSLog("HiZip compression request failed: %@", error.message ?? error.code) }
       self?.deliveringCompression = false
@@ -64,7 +64,7 @@ class AppDelegate: FlutterAppDelegate {
       let controller = window.contentViewController as? FlutterViewController else { return }
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
-    let channel = FlutterMethodChannel(name: "dev.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
+    let channel = FlutterMethodChannel(name: "com.hibanaw.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
     let paths = pendingArchives
     pendingArchives.removeAll()
     for path in paths { channel.invokeMethod("openArchive", arguments: path) }

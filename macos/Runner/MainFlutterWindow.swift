@@ -103,7 +103,7 @@ class MainFlutterWindow: HizipPreviewWindow {
     guard let controller = contentViewController as? FlutterViewController else {
       finishCleanup(true); return
     }
-    let channel = FlutterMethodChannel(name: "dev.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
+    let channel = FlutterMethodChannel(name: "com.hibanaw.hizip/native_files", binaryMessenger: controller.engine.binaryMessenger)
     channel.invokeMethod("prepareWindowClose", arguments: nil) { [weak self] result in
       self?.finishCleanup(!(result is FlutterError))
     }
@@ -140,7 +140,7 @@ class MainFlutterWindow: HizipPreviewWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     FlutterMultiWindowPlugin.setOnWindowCreatedCallback { controller in
       RegisterGeneratedPlugins(registry: controller)
-      let channel = FlutterMethodChannel(name: "dev.hizip/task-window-host", binaryMessenger: controller.engine.binaryMessenger)
+      let channel = FlutterMethodChannel(name: "com.hibanaw.hizip/task-window-host", binaryMessenger: controller.engine.binaryMessenger)
       let modalHost = AuxiliaryDialogModalHost(channel: channel)
       channel.setMethodCallHandler { [weak controller] call, result in
         guard let window = controller?.view.window else {

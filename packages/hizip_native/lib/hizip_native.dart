@@ -212,7 +212,7 @@ class NativeArchive {
 
   /// The native ABI uses signed 64-bit byte counts; no application size cap.
   static const unlimitedSize = 0x7fffffffffffffff;
-  static const _files = MethodChannel('dev.hizip/native_files');
+  static const _files = MethodChannel('com.hibanaw.hizip/native_files');
   static bool get _usesMacFiles =>
       Platform.isMacOS && Platform.environment['HIZIP_NATIVE_LIBRARY'] == null;
   static Future<Directory> stagingDirectory(String destination) async {

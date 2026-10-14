@@ -63,7 +63,7 @@ bool FlutterWindow::OnCreate() {
     auto* view_controller = reinterpret_cast<flutter::FlutterViewController*>(controller);
     RegisterPlugins(view_controller->engine());
     auto channel = std::make_shared<flutter::MethodChannel<flutter::EncodableValue>>(
-      view_controller->engine()->messenger(), "dev.hizip/task-window-host", &flutter::StandardMethodCodec::GetInstance());
+      view_controller->engine()->messenger(), "com.hibanaw.hizip/task-window-host", &flutter::StandardMethodCodec::GetInstance());
     channel->SetMethodCallHandler([view_controller, channel](const auto& call, auto result) {
       const HWND host = GetAncestor(view_controller->view()->GetNativeWindow(), GA_ROOT);
       if (call.method_name() == "nativePointer") {
@@ -128,6 +128,18 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_COPYDATA: {
+      // Selection forwarded by an Explorer context-menu launch.
+      CompressRequest request;
+      if (ParseCompressCopyData(reinterpret_cast<COPYDATASTRUCT*>(lparam),
+                                &request)) {
+        if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        DeliverCompressRequest(request);
+        return TRUE;
+      }
+      break;
+    }
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

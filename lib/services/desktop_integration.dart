@@ -4,11 +4,13 @@ import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 
 import 'dart:convert';
+import 'dart:io';
 
 import '../models/application_menu.dart';
 import '../models/finder_compression_request.dart';
 
 import 'linux_file_association_io.dart' as linux;
+import 'windows_shell_menu.dart';
 
 class DefaultApplication {
   const DefaultApplication(this.name, this.icon);
@@ -31,9 +33,16 @@ class FileApplication extends DefaultApplication {
 /// Missing platform support leaves the regular Flutter UI usable.
 class DesktopIntegration {
   bool? lastDragSucceeded;
-  static const channel = MethodChannel('dev.hizip/native_files');
+  static const channel = MethodChannel('com.hibanaw.hizip/native_files');
   bool get supportsMenuBar => defaultTargetPlatform == TargetPlatform.macOS;
   bool get supportsQuickLook => defaultTargetPlatform == TargetPlatform.macOS;
+  bool get supportsExplorerMenu =>
+      defaultTargetPlatform == TargetPlatform.windows;
+  /// Running from an MSIX package (Microsoft Store or sideloaded). Its context
+  /// menu is declared in the package manifest and cannot be registered here.
+  bool get isPackaged =>
+      supportsExplorerMenu &&
+      Platform.resolvedExecutable.toLowerCase().contains(r'\windowsapps\');
   bool get supportsFileIntegration =>
       (defaultTargetPlatform == TargetPlatform.macOS ||
       defaultTargetPlatform == TargetPlatform.linux ||
@@ -115,7 +124,7 @@ class DesktopIntegration {
     VoidCallback? dragEnded,
     VoidCallback? dragStarted,
   }) {
-    if (!supportsQuickLook) return;
+    if (!supportsQuickLook && !supportsExplorerMenu) return;
     channel.setMethodCallHandler((call) async {
       if (call.method == 'prepareWindowClose') {
         await prepareClose?.call();
@@ -171,11 +180,70 @@ class DesktopIntegration {
     if (defaultTargetPlatform == TargetPlatform.linux) {
       return linux.setDefaultArchiveHandler();
     }
+    if (supportsExplorerMenu) {
+      // Windows only lets the user choose default apps in system settings.
+      await Process.run('explorer.exe', ['ms-settings:defaultapps']);
+      return 0;
+    }
     throw UnsupportedError('当前平台不支持设置默认打开方式');
   }
 
   Future<void> showFinderExtensionSettings() =>
       channel.invokeMethod<void>('showFinderExtensionSettings');
+
+  /// The Explorer context-menu selection that started this process, if any.
+  Future<FinderCompressionRequest?> initialCompressionRequest() async {
+    if (!supportsExplorerMenu) return null;
+    try {
+      final arguments = await channel.invokeMethod<Object?>(
+        'initialCompressRequest',
+      );
+      return arguments == null
+          ? null
+          : FinderCompressionRequest.fromPlatform(arguments);
+    } on MissingPluginException {
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<bool> explorerMenuInstalled() =>
+      const WindowsShellMenu().isInstalled();
+
+  /// Enables or removes the Explorer menu. Returns true when the Windows 11
+  /// menu is active; otherwise the classic menu ("Show more options") is.
+  Future<bool> setExplorerMenuInstalled(
+    bool installed, {
+    String createLabel = '创建压缩包',
+    String quickZipLabel = '快速创建 ZIP',
+  }) async {
+    const menu = WindowsShellMenu();
+    const modern = WindowsModernMenu();
+    final executable = Platform.resolvedExecutable;
+    if (!installed) {
+      await menu.uninstall();
+      if (WindowsModernMenu.isBundled(executable)) await modern.unregister();
+      return false;
+    }
+    if (WindowsModernMenu.isBundled(executable)) {
+      try {
+        await modern.register(executable);
+        // The package already shows in both menus; avoid a duplicate entry.
+        await menu.uninstall();
+        return true;
+      } on ProcessException {
+        /* Not Windows 11 or no Developer Mode: use the classic menu. */
+      }
+    }
+    await menu.install(
+      executable: executable,
+      title: 'HiZip',
+      createLabel: createLabel,
+      quickZipLabel: quickZipLabel,
+    );
+    return false;
+  }
 
   Future<bool> authorizeFileAccess({
     List<String> readPaths = const [],
@@ -363,6 +431,8 @@ class DesktopIntegration {
   }
 
   void dispose() {
-    if (supportsQuickLook) channel.setMethodCallHandler(null);
+    if (supportsQuickLook || supportsExplorerMenu) {
+      channel.setMethodCallHandler(null);
+    }
   }
 }

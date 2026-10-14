@@ -230,7 +230,7 @@ static void my_application_activate(GApplication* application) {
       FL_PLUGIN_REGISTRY(view), "DesktopMultiWindowPlugin");
   auto* codec = fl_standard_method_codec_new();
   auto* native_channel = fl_method_channel_new(
-      fl_plugin_registrar_get_messenger(registrar), "dev.hizip/native_files",
+      fl_plugin_registrar_get_messenger(registrar), "com.hibanaw.hizip/native_files",
       FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(
       native_channel, native_files_handler, window, nullptr);
@@ -248,7 +248,7 @@ static void my_application_activate(GApplication* application) {
     }
     auto* codec = fl_standard_method_codec_new();
     auto* channel = fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
-      "dev.hizip/task-window-host", FL_METHOD_CODEC(codec));
+      "com.hibanaw.hizip/task-window-host", FL_METHOD_CODEC(codec));
     fl_method_channel_set_method_call_handler(channel, [](FlMethodChannel* channel, FlMethodCall* call, gpointer data) {
       auto* host = gtk_widget_get_toplevel(GTK_WIDGET(data));
       const auto* method = fl_method_call_get_name(call);

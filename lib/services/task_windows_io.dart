@@ -25,7 +25,7 @@ WindowController? _settingsWindow;
 Future<bool>? _settingsOpening;
 ValueChanged<String>? _taskAction;
 Future<void> Function()? _settingsChanged;
-const _host = MethodChannel('dev.hizip/task-window-host');
+const _host = MethodChannel('com.hibanaw.hizip/task-window-host');
 final _propertiesActions = <String, PropertiesWindowAction>{};
 int _propertiesSequence = 0;
 final auxiliaryModalDepth = ValueNotifier(0);

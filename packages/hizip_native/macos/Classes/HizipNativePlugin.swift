@@ -74,7 +74,7 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
   private let preview = ArchivePreviewResponder()
   private var iconCache: [String: Data] = [:]
   private let dragSource = ArchiveDragSource()
-  private let fileQueue = DispatchQueue(label: "dev.hizip.file-operations", qos: .userInitiated)
+  private let fileQueue = DispatchQueue(label: "com.hibanaw.hizip.file-operations", qos: .userInitiated)
   private var dragEvent: NSEvent?
   private var eventMonitor: Any?
   private var keyMonitor: Any?
@@ -313,7 +313,7 @@ public class HizipNativePlugin: NSObject, FlutterPlugin, NSMenuItemValidation {
     session.draggingFormation = .pile
   }
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let channel = FlutterMethodChannel(name: "dev.hizip/native_files", binaryMessenger: registrar.messenger)
+    let channel = FlutterMethodChannel(name: "com.hibanaw.hizip/native_files", binaryMessenger: registrar.messenger)
     registrar.addMethodCallDelegate(HizipNativePlugin(channel: channel, viewController: registrar.viewController), channel: channel)
   }
   private func png(_ image: NSImage, pixelSize: Int = 128) -> Data? {

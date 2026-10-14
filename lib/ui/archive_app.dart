@@ -738,6 +738,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       if (!mounted || closing) return;
       await loadArchive(path);
     }
+    final request = await desktop.initialCompressionRequest();
+    if (request != null && mounted && !closing) {
+      await receiveFinderCompression(request);
+    }
   }
 
   Future<void> loadRecentArchives() async {
