@@ -353,7 +353,7 @@ packages:
     description:
       path: "."
       ref: main
-      resolved-ref: b096f2df8ab5fafecfdb0d40bc02eaec348c2efa
+      resolved-ref: "1f0568ea71c2929dfa733c98975f072abf8dbeb9"
       url: "https://github.com/Hibanaw/HiWidget.git"
     source: git
     version: "0.1.0"

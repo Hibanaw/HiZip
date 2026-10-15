@@ -127,8 +127,8 @@ double desktopInputHeight(
   return height.clamp(minimum, double.infinity);
 }
 
-/// Keeps the workspace's compact toolbar sizing while Forui owns interaction,
-/// keyboard focus, disabled states and visual styling.
+/// App-level adapter over HiWidget's [HiButton]: it translates the tooltip with
+/// the app language and keeps hover text readable on the accent-tinted fill.
 class DesktopButton extends StatelessWidget {
   const DesktopButton({
     super.key,
@@ -156,106 +156,27 @@ class DesktopButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final emphasized = active || primary;
-    final scheme = Theme.of(context).colorScheme;
-    final colors = FTheme.of(context).colors;
-    final background = primary
-        ? scheme.primary
-        : active
-        ? scheme.primaryContainer
-        : flat
-        ? Colors.transparent
-        : colors.card;
-    final hoveredBackground = emphasized
-        ? Color.lerp(background, Colors.black, .08)!
-        : scheme.primary.withValues(
-            alpha: Theme.of(context).brightness == Brightness.dark ? .18 : .10,
-          );
-    final color = emphasized
-        ? onPressed == null
-              ? colors.mutedForeground
-              : primary
-              ? scheme.onPrimary
-              : scheme.onPrimaryContainer
-        : foreground;
-    Widget button = FButton.raw(
-      variant: primary
-          ? FButtonVariant.primary
+    final palette = HiPalette.of(context);
+    return HiButton(
+      kind: primary
+          ? HiButtonKind.primary
           : flat
-          ? FButtonVariant.ghost
-          : FButtonVariant.outline,
-      size: FButtonSizeVariant.sm,
-      selected: active,
-      style: FButtonStyleDelta.delta(
-        decoration: FVariants.from(
-          BoxDecoration(
-            color: background,
-            borderRadius: borderRadius,
-            border: !emphasized && !flat
-                ? Border.all(color: colors.border)
-                : null,
-          ),
-          variants: {
-            [FTappableVariant.hovered, FTappableVariant.pressed]:
-                DecorationDelta.boxDelta(color: hoveredBackground),
-            [FTappableVariant.disabled]: DecorationDelta.boxDelta(
-              color: colors.disable(background),
-            ),
-          },
-        ),
-        contentStyle: FButtonContentStyleDelta.delta(
-          constraints: BoxConstraints(minHeight: minHeight),
-          padding: EdgeInsetsGeometryDelta.value(padding),
-        ),
-      ),
+          ? HiButtonKind.flat
+          : HiButtonKind.normal,
+      active: active,
+      onPressed: onPressed,
+      tooltip: tooltip == null ? null : appText(context, tooltip!),
+      padding: padding,
+      minHeight: minHeight,
+      borderRadius: borderRadius,
+      foreground: foreground,
       focusNode: focusNode,
-      onPress: onPressed,
-      child: Builder(
-        builder: (context) {
-          final data = FButtonData.of(context);
-          final content = data.style.contentStyle;
-          final text = content.textStyle.resolve(data.variants);
-          final icon = content.iconStyle.resolve(data.variants);
-          final interacting =
-              data.variants.contains(FTappableVariant.hovered) ||
-              data.variants.contains(FTappableVariant.pressed);
-          final contentColor =
-              color ??
-              (onPressed != null && interacting
-                  ? desktopAccentForeground(
-                      context,
-                      background: Color.alphaBlend(
-                        hoveredBackground,
-                        colors.card,
-                      ),
-                    )
-                  : null);
-          return ConstrainedBox(
-            constraints: BoxConstraints(minHeight: minHeight),
-            child: Padding(
-              padding: padding,
-              child: Center(
-                widthFactor: 1,
-                heightFactor: 1,
-                child: DefaultTextStyle.merge(
-                  style: text.copyWith(color: contentColor),
-                  child: IconTheme(
-                    data: contentColor == null
-                        ? icon
-                        : icon.copyWith(color: contentColor),
-                    child: child,
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
+      hoverForeground: desktopAccentForeground(
+        context,
+        background: Color.alphaBlend(HiButton.hoverFill(palette), palette.card),
       ),
+      child: child,
     );
-    if (tooltip != null) {
-      button = Tooltip(message: appText(context, tooltip!), child: button);
-    }
-    return button;
   }
 }
 
@@ -274,18 +195,12 @@ class DesktopIconButton extends StatelessWidget {
   final bool active;
   final BorderRadius borderRadius;
   @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 30,
-    height: 28,
-    child: DesktopButton(
-      flat: true,
-      active: active,
-      borderRadius: borderRadius,
-      tooltip: tooltip,
-      padding: const EdgeInsets.all(4),
-      onPressed: onPressed,
-      child: icon,
-    ),
+  Widget build(BuildContext context) => HiIconButton(
+    icon: icon,
+    onPressed: onPressed,
+    active: active,
+    borderRadius: borderRadius,
+    tooltip: tooltip == null ? null : appText(context, tooltip!),
   );
 }
 

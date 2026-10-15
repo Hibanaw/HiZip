@@ -89,12 +89,75 @@ bool PngEncoderClsid(CLSID* clsid) {
   return false;
 }
 
+// Reads |icon| as straight-alpha ARGB pixels. GDI+'s Bitmap(HICON) drops the
+// alpha channel of icons taken from the shell image lists, so transparent
+// areas come out opaque black; reading the bits ourselves keeps them.
+bool IconPixels(HICON icon, int* width, int* height,
+                std::vector<uint32_t>* pixels) {
+  ICONINFO info = {};
+  if (!GetIconInfo(icon, &info)) return false;
+  bool ok = false;
+  BITMAP color = {};
+  if (info.hbmColor &&
+      GetObject(info.hbmColor, sizeof(color), &color) == sizeof(color) &&
+      color.bmWidth > 0 && color.bmHeight > 0) {
+    const int w = color.bmWidth;
+    const int h = color.bmHeight;
+    BITMAPINFO header = {};
+    header.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    header.bmiHeader.biWidth = w;
+    header.bmiHeader.biHeight = -h;  // top-down
+    header.bmiHeader.biPlanes = 1;
+    header.bmiHeader.biBitCount = 32;
+    header.bmiHeader.biCompression = BI_RGB;
+    std::vector<uint32_t> data(static_cast<size_t>(w) * h);
+    HDC dc = GetDC(nullptr);
+    if (GetDIBits(dc, info.hbmColor, 0, h, data.data(), &header,
+                  DIB_RGB_COLORS) == h) {
+      const bool has_alpha = std::any_of(
+          data.begin(), data.end(), [](uint32_t p) { return (p >> 24) != 0; });
+      if (!has_alpha) {
+        // Classic icon without an alpha channel: its opacity is the AND mask,
+        // where white marks transparent pixels.
+        std::vector<uint32_t> mask(data.size());
+        BITMAPINFO mask_header = header;
+        const bool have_mask =
+            info.hbmMask &&
+            GetDIBits(dc, info.hbmMask, 0, h, mask.data(), &mask_header,
+                      DIB_RGB_COLORS) == h;
+        for (size_t i = 0; i < data.size(); ++i) {
+          const bool transparent = have_mask && (mask[i] & 0x00FFFFFF) != 0;
+          data[i] = transparent ? 0 : (data[i] | 0xFF000000u);
+        }
+      }
+      *width = w;
+      *height = h;
+      *pixels = std::move(data);
+      ok = true;
+    }
+    ReleaseDC(nullptr, dc);
+  }
+  if (info.hbmColor) DeleteObject(info.hbmColor);
+  if (info.hbmMask) DeleteObject(info.hbmMask);
+  return ok;
+}
+
 // Renders |icon| into a square |size|x|size| PNG, or an empty vector on
 // failure.
 std::vector<uint8_t> IconToPng(HICON icon, int size) {
   if (!icon) return {};
   EnsureGdiPlus();
-  Gdiplus::Bitmap source(icon);
+  int icon_width = 0, icon_height = 0;
+  std::vector<uint32_t> icon_pixels;
+  std::unique_ptr<Gdiplus::Bitmap> own_source;
+  if (IconPixels(icon, &icon_width, &icon_height, &icon_pixels)) {
+    own_source = std::make_unique<Gdiplus::Bitmap>(
+        icon_width, icon_height, icon_width * 4, PixelFormat32bppARGB,
+        reinterpret_cast<BYTE*>(icon_pixels.data()));
+  } else {
+    own_source = std::make_unique<Gdiplus::Bitmap>(icon);
+  }
+  Gdiplus::Bitmap& source = *own_source;
   if (source.GetLastStatus() != Gdiplus::Ok) return {};
   Gdiplus::Bitmap target(size, size, PixelFormat32bppARGB);
   Gdiplus::Graphics graphics(&target);

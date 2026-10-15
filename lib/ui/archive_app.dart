@@ -4322,7 +4322,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         expanded: shown,
         child: DesktopIconButton(
           tooltip: '应用菜单',
-          icon: const Icon(Icons.menu, size: 19),
+          icon: const Icon(FIcons.menu, size: 17),
           active: shown,
           onPressed: toggle,
         ),
@@ -5595,6 +5595,10 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 children: (summaryLayout ?? gallery)
                     ? [information]
                     : [
+                        // spaceBetween with an empty first child puts half of the
+                        // free height above and half below the preview, so it
+                        // is centred between the top and the information.
+                        const SizedBox.shrink(),
                         preview,
                         Padding(
                           padding: const EdgeInsets.only(top: 24),
@@ -5656,9 +5660,13 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 ? const SizedBox()
                 : Container(
                     key: const ValueKey('inspector-preview'),
-                    height: (constraints.maxHeight * .375).clamp(90, 270),
+                    constraints: BoxConstraints(
+                      minHeight: (constraints.maxHeight * .26).clamp(90, 190),
+                    ),
                     padding: const EdgeInsets.all(8),
-                    child: previewContent(),
+                    child: previewContent(
+                      iconSize: inspectorIconSize(constraints),
+                    ),
                   ),
             information: Column(
               key: const ValueKey('inspector-information'),
@@ -5777,23 +5785,23 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         );
     return inspectorLayout(
       summaryLayout: summarized,
-      preview: SizedBox(
+      preview: ConstrainedBox(
         key: const ValueKey('inspector-preview'),
-        height: (constraints.maxHeight * .375).clamp(90, 270),
-        child: LayoutBuilder(
-          builder: (_, bounds) => Stack(
-            alignment: Alignment.center,
-            children: [
-              for (var i = entries.length.clamp(1, 3) - 1; i >= 0; i--)
-                Transform.translate(
-                  offset: Offset(i * 8.0, i * 8.0),
-                  child: fileIcon(
-                    entries[i],
-                    size: bounds.biggest.shortestSide * .7,
-                  ),
+        constraints: BoxConstraints(
+          minHeight: (constraints.maxHeight * .26).clamp(90, 190),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            for (var i = entries.length.clamp(1, 3) - 1; i >= 0; i--)
+              Transform.translate(
+                offset: Offset(i * 8.0, i * 8.0),
+                child: fileIcon(
+                  entries[i],
+                  size: inspectorIconSize(constraints) * .9,
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
       information: Column(
@@ -5876,18 +5884,18 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       summaryLayout: summarized,
       preview: Container(
         key: const ValueKey('inspector-preview'),
-        height: (constraints.maxHeight * .375).clamp(90, 270),
+        constraints: BoxConstraints(
+          minHeight: (constraints.maxHeight * .26).clamp(90, 190),
+        ),
         padding: const EdgeInsets.all(8),
-        child: LayoutBuilder(
-          builder: (context, previewConstraints) => Center(
-            child: fileIcon(
-              ArchiveEntry(
-                path: summaryFolder.isEmpty ? document!.path : summaryFolder,
-                size: totalSize,
-                directory: !archive,
-              ),
-              size: previewConstraints.biggest.shortestSide * .72,
+        child: Center(
+          child: fileIcon(
+            ArchiveEntry(
+              path: summaryFolder.isEmpty ? document!.path : summaryFolder,
+              size: totalSize,
+              directory: !archive,
             ),
+            size: inspectorIconSize(constraints),
           ),
         ),
       ),
@@ -6001,7 +6009,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         ? value
         : translateAppText(value, settings.locale.languageCode),
   );
-  Widget previewContent({bool large = false, bool centerImage = false}) {
+
+  /// Icon edge in the inspector preview, from the panel width so the preview can
+  /// sit inside an IntrinsicHeight (which cannot contain a LayoutBuilder).
+  double inspectorIconSize(BoxConstraints panel) =>
+      (panel.maxWidth * .4).clamp(48.0, 150.0).toDouble();
+
+  Widget previewContent({
+    bool large = false,
+    bool centerImage = false,
+    double? iconSize,
+  }) {
     final e = selected;
     if (e == null) return const SizedBox();
     if (previewError != null) {
@@ -6016,9 +6034,17 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
       );
     }
     if (e.directory || !(e.isImage || e.isText)) {
+      if (iconSize != null) return Center(child: fileIcon(e, size: iconSize));
       return LayoutBuilder(
         builder: (context, constraints) => Center(
-          child: fileIcon(e, size: constraints.biggest.shortestSide * .72),
+          child: fileIcon(
+            e,
+            size: large
+                ? constraints.biggest.shortestSide * .8
+                : (constraints.biggest.shortestSide * .8)
+                      .clamp(0.0, 150.0)
+                      .toDouble(),
+          ),
         ),
       );
     }

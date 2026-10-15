@@ -423,7 +423,7 @@ void main() {
     final regular = requests.singleWhere(
       (request) => request['path'] == 'sample.zip',
     );
-    expect(regular['pixelSize'], 256);
+    expect(regular['pixelSize'], 128);
     requests.clear();
     tester.view.physicalSize = const Size(2880, 1800);
     tester.view.devicePixelRatio = 2;
@@ -431,7 +431,7 @@ void main() {
     final retina = requests.singleWhere(
       (request) => request['path'] == 'sample.zip',
     );
-    expect(retina['pixelSize'], 512);
+    expect(retina['pixelSize'], 256);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -505,7 +505,7 @@ void main() {
       expect(tester.takeException(), isNull);
     }
     expect(
-      find.descendant(of: menuButton, matching: find.byIcon(Icons.menu)),
+      find.descendant(of: menuButton, matching: find.byIcon(FIcons.menu)),
       findsOneWidget,
     );
     await tester.tap(find.byTooltip('应用菜单'));

@@ -462,10 +462,12 @@ void main() {
     final information = tester.getRect(
       find.byKey(const ValueKey('inspector-information')),
     );
-    expect(preview.top, panel.top + 16);
+    expect(preview.top, greaterThanOrEqualTo(panel.top + 16));
+    expect(preview.height, closeTo((panel.height * .26).clamp(90, 190), .01));
+    // Free height is split evenly above and below the preview.
     expect(
-      preview.height,
-      closeTo((panel.height * .5).clamp(120, 360) * .75, .01),
+      preview.top - (panel.top + 16),
+      closeTo(information.top - 24 - preview.bottom, 1),
     );
     final actions = tester.getRect(
       find.byKey(const ValueKey('inspector-actions')),
@@ -484,6 +486,35 @@ void main() {
     await tester.tap(find.byTooltip('预览栏'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('selection-strip')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('folder icon sits in the middle of the free preview space', (
+    tester,
+  ) async {
+    await mount(tester, FinderService(), FinderDesktop());
+    await tester.tap(find.byKey(const ValueKey('file-docs')));
+    await tester.pumpAndSettle();
+    final preview = tester.getRect(
+      find.byKey(const ValueKey('inspector-preview')),
+    );
+    final icon = tester.getRect(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('inspector-preview')),
+            matching: find.byType(Icon),
+          )
+          .first,
+    );
+    final information = tester.getRect(
+      find.byKey(const ValueKey('inspector-information')),
+    );
+    final panel = tester.getRect(find.byKey(const ValueKey('inspector-panel')));
+    expect(icon.center.dx, closeTo(preview.center.dx, 1));
+    expect(
+      icon.center.dy,
+      closeTo(((panel.top + 16) + (information.top - 24)) / 2, 2),
+    );
+    expect(icon.height, lessThanOrEqualTo(150));
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets('sidebar resize hit areas extend beyond the unchanged divider', (
