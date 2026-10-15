@@ -25,6 +25,23 @@ jobs:
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install zlib liblzma --triplet x64-windows-static
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      # HiWidget is a private repository. Fetch it over SSH with a read-only
+      # deploy key kept in the HIWIDGET_DEPLOY_KEY secret; pubspec.yaml keeps
+      # its https URL for local development.
+      - name: Configure access to HiWidget
+        shell: pwsh
+        env:
+          HIWIDGET_DEPLOY_KEY: ${{ secrets.HIWIDGET_DEPLOY_KEY }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'hiwidget-ssh'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $key = Join-Path $dir 'id'
+          [IO.File]::WriteAllText($key, $env:HIWIDGET_DEPLOY_KEY.TrimEnd() + "`n")
+          icacls $key /inheritance:r /grant:r "$($env:USERNAME):(R)" | Out-Null
+          $path = $key -replace '\\', '/'
+          "GIT_SSH_COMMAND=ssh -i '$path' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          git config --global url."git@github.com:Hibanaw/HiWidget.git".insteadOf "https://github.com/Hibanaw/HiWidget.git"
+
       - run: flutter pub get
 
       # Optional: store a base64-encoded PFX in MSIX_PFX_BASE64 and its
