@@ -21,6 +21,7 @@ import '../services/rar_volumes.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:forui/forui.dart';
+import 'package:hiwidget/hiwidget.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
@@ -61,7 +62,7 @@ import '../services/file_transfer_clipboard.dart';
 
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
-const _selectionStripHeight = 40.0;
+const _selectionStripHeight = HiSize.strip;
 
 class _ArchiveTab {
   _ArchiveTab(this.document);
@@ -1398,6 +1399,16 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     if (columns) revealColumns();
     revealCurrentPath();
     ensureGallerySelection();
+  }
+
+  /// Explicit folder click (tree or breadcrumb). Clicking the folder that is
+  /// already open drops the item selection so its overview is shown again.
+  void openFolder(String path) {
+    if (path == folder) {
+      clearSelection();
+    } else {
+      navigate(path);
+    }
   }
 
   void revealCurrentPath() {
@@ -3152,112 +3163,79 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                               body: splitterRow(
                                 resizerKey: 'sidebar-resizer',
                                 enabled: desktopLayout,
-                                boundaryWidth: leftWidth,
-                                resize: (dx) =>
-                                    sidebarWidth = (leftWidth + dx).clamp(
-                                      160.0,
-                                      (constraints.maxWidth * .28).clamp(
-                                        160.0,
-                                        double.infinity,
+                                sideWidth: leftWidth,
+                                minSideWidth: 160,
+                                maxSideWidth: (constraints.maxWidth * .28)
+                                    .clamp(160.0, double.infinity),
+                                onResize: (width) => sidebarWidth = width,
+                                side: desktopLayout
+                                    ? sidebar()
+                                    : const SizedBox(),
+                                content: Column(
+                                  children: [
+                                    if (tabs.length > 1) archiveTabs(),
+                                    Expanded(
+                                      child: splitterRow(
+                                        resizerKey: 'inspector-resizer',
+                                        enabled: inspectorVisible,
+                                        sideWidth: rightWidth,
+                                        sideOnRight: true,
+                                        minSideWidth: 220,
+                                        maxSideWidth:
+                                            (constraints.maxWidth * .32).clamp(
+                                              220.0,
+                                              double.infinity,
+                                            ),
+                                        onResize: (width) =>
+                                            inspectorWidth = width,
+                                        side: inspectorVisible
+                                            ? inspectorPanel()
+                                            : const SizedBox(),
+                                        content: directoryBackground(
+                                          child: document == null
+                                              ? dropTarget('', emptyWorkspace())
+                                              : FileContextMenu(
+                                                  onProperties: busy
+                                                      ? null
+                                                      : () {
+                                                          clearSelection();
+                                                          showProperties();
+                                                        },
+                                                  onNewFolder:
+                                                      busy ||
+                                                          !document!.writable
+                                                      ? null
+                                                      : () => newEntry(
+                                                          directory: true,
+                                                        ),
+                                                  onNewDocument:
+                                                      busy ||
+                                                          !document!.writable
+                                                      ? null
+                                                      : () => newEntry(),
+                                                  onExtractAll: busy
+                                                      ? null
+                                                      : () => extract(),
+                                                  onExtractAllNamed: busy
+                                                      ? null
+                                                      : () => extract(
+                                                          namedFolder: true,
+                                                        ),
+                                                  onPaste:
+                                                      busy ||
+                                                          !document!.writable
+                                                      ? null
+                                                      : pasteFiles,
+                                                  child: dropTarget(
+                                                    folder,
+                                                    browser(),
+                                                  ),
+                                                ),
+                                        ),
                                       ),
                                     ),
-                                children: [
-                                  if (desktopLayout)
-                                    SizedBox(
-                                      width: leftWidth,
-                                      child: sidebar(),
-                                    ),
-                                  if (desktopLayout)
-                                    splitterLine('sidebar-resizer'),
-                                  Expanded(
-                                    child: Column(
-                                      children: [
-                                        if (tabs.length > 1) archiveTabs(),
-                                        Expanded(
-                                          child: splitterRow(
-                                            resizerKey: 'inspector-resizer',
-                                            enabled: inspectorVisible,
-                                            boundaryWidth: rightWidth,
-                                            trailing: true,
-                                            resize: (dx) => inspectorWidth =
-                                                (rightWidth - dx).clamp(
-                                                  220.0,
-                                                  (constraints.maxWidth * .32)
-                                                      .clamp(
-                                                        220.0,
-                                                        double.infinity,
-                                                      ),
-                                                ),
-                                            children: [
-                                              Expanded(
-                                                child: directoryBackground(
-                                                  child: document == null
-                                                      ? dropTarget(
-                                                          '',
-                                                          emptyWorkspace(),
-                                                        )
-                                                      : FileContextMenu(
-                                                          onProperties: busy
-                                                              ? null
-                                                              : () {
-                                                                  clearSelection();
-                                                                  showProperties();
-                                                                },
-                                                          onNewFolder:
-                                                              busy ||
-                                                                  !document!
-                                                                      .writable
-                                                              ? null
-                                                              : () => newEntry(
-                                                                  directory:
-                                                                      true,
-                                                                ),
-                                                          onNewDocument:
-                                                              busy ||
-                                                                  !document!
-                                                                      .writable
-                                                              ? null
-                                                              : () =>
-                                                                    newEntry(),
-                                                          onExtractAll: busy
-                                                              ? null
-                                                              : () => extract(),
-                                                          onExtractAllNamed:
-                                                              busy
-                                                              ? null
-                                                              : () => extract(
-                                                                  namedFolder:
-                                                                      true,
-                                                                ),
-                                                          onPaste:
-                                                              busy ||
-                                                                  !document!
-                                                                      .writable
-                                                              ? null
-                                                              : pasteFiles,
-                                                          child: dropTarget(
-                                                            folder,
-                                                            browser(),
-                                                          ),
-                                                        ),
-                                                ),
-                                              ),
-                                              if (inspectorVisible) ...[
-                                                splitterLine(
-                                                  'inspector-resizer',
-                                                ),
-                                                SizedBox(
-                                                  width: rightWidth,
-                                                  child: inspectorPanel(),
-                                                ),
-                                              ],
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -3328,48 +3306,33 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     return bindings;
   }
 
-  Widget splitterLine(String key) => Container(
-    key: ValueKey('$key-line'),
-    width: 1,
-    color: context.theme.colors.border,
-  );
-
   Widget splitterRow({
     required String resizerKey,
     required bool enabled,
-    required double boundaryWidth,
-    required void Function(double) resize,
-    required List<Widget> children,
-    bool trailing = false,
-  }) => Stack(
-    fit: StackFit.expand,
-    children: [
-      Row(children: children),
-      if (enabled)
-        Positioned(
-          left: trailing ? null : boundaryWidth - 6,
-          right: trailing ? boundaryWidth - 6 : null,
-          top: 0,
-          bottom: 0,
-          width: 13,
-          child: splitter(resizerKey, resize),
-        ),
-    ],
-  );
-
-  Widget splitter(String key, void Function(double) resize) => MouseRegion(
-    cursor: SystemMouseCursors.resizeColumn,
-    child: GestureDetector(
-      key: ValueKey(key),
-      behavior: HitTestBehavior.opaque,
-      onHorizontalDragUpdate: (event) {
-        clearPreparedDrag();
-        setState(() => resize(event.delta.dx));
-        saveBrowsingPreferences();
-      },
-      child: const SizedBox.expand(),
-    ),
-  );
+    required double sideWidth,
+    required double minSideWidth,
+    required double maxSideWidth,
+    required void Function(double) onResize,
+    required Widget side,
+    required Widget content,
+    bool sideOnRight = false,
+  }) => enabled
+      ? HiSplitPane(
+          dividerKey: ValueKey('$resizerKey-line'),
+          handleKey: ValueKey(resizerKey),
+          side: side,
+          content: content,
+          sideWidth: sideWidth,
+          minSideWidth: minSideWidth,
+          maxSideWidth: maxSideWidth,
+          sideOnRight: sideOnRight,
+          onSideWidthChanged: (width) {
+            clearPreparedDrag();
+            setState(() => onResize(width));
+            saveBrowsingPreferences();
+          },
+        )
+      : content;
 
   void revealColumns() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3427,7 +3390,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Container(
-                          height: 27,
+                          height: HiSize.header,
                           alignment: Alignment.centerLeft,
                           padding: EdgeInsets.symmetric(
                             horizontal:
@@ -3930,12 +3893,12 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                       : 'tree-${tab.document.path}-${node.path}',
                                 ),
                                 decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(5),
+                                  borderRadius: HiRadius.controlAll,
                                   color: active && folder == node.path
                                       ? context.theme.colors.border
                                       : Colors.transparent,
                                 ),
-                                height: 29,
+                                height: HiSize.row,
                                 padding: EdgeInsets.only(
                                   left: (depth * 14.0).clamp(
                                     0,
@@ -3981,7 +3944,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                             ? null
                                             : () {
                                                 if (!active) activateTab(tab);
-                                                navigate(node.path);
+                                                openFolder(node.path);
                                                 focusSidebar();
                                                 fileFocus.requestFocus();
                                                 if (contentScaffold
@@ -4047,84 +4010,29 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
         tabScroll.jumpTo(start.clamp(0, position.maxScrollExtent));
       }
     });
-    return Container(
+    return HiTabStrip(
       key: const ValueKey('archive-tabs'),
-      height: 36,
-      decoration: BoxDecoration(
-        color: context.theme.colors.muted,
-        border: Border(
-          bottom: BorderSide(color: Theme.of(context).dividerColor),
-        ),
-      ),
-      child: ListView(
-        controller: tabScroll,
-        scrollDirection: Axis.horizontal,
-        children: [
-          for (final tab in tabs)
-            Semantics(
-              selected: tab.document.path == document?.path,
-              child: Container(
-                key: ValueKey('archive-tab-${tab.document.path}'),
-                width: 180,
-                margin: const EdgeInsets.fromLTRB(3, 4, 0, 0),
-                decoration: BoxDecoration(
-                  color: tab.document.path == document?.path
-                      ? context.theme.colors.card
-                      : null,
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(8),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: busy ? null : () => switchTab(tab),
-                        child: Tooltip(
-                          message: tab.document.path,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: Row(
-                              children: [
-                                fileIcon(
-                                  ArchiveEntry(
-                                    path: tab.document.path,
-                                    size: 0,
-                                    directory: false,
-                                  ),
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    p.basename(tab.document.path),
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: tab.document.path == document?.path
-                                          ? ink
-                                          : muted,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    DesktopIconButton(
-                      tooltip: '关闭标签页',
-                      onPressed: () => closeTab(tab.document.path),
-                      icon: const Icon(CupertinoIcons.xmark, size: 11),
-                    ),
-                  ],
-                ),
-              ),
+      controller: tabScroll,
+      selectedId: document?.path,
+      closeTooltip: appText(context, '关闭标签页'),
+      onSelected: (path) {
+        if (busy) return;
+        switchTab(tabs.firstWhere((tab) => tab.document.path == path));
+      },
+      onClose: closeTab,
+      tabs: [
+        for (final tab in tabs)
+          HiTab(
+            id: tab.document.path,
+            tabKey: ValueKey('archive-tab-${tab.document.path}'),
+            label: p.basename(tab.document.path),
+            tip: tab.document.path,
+            leading: fileIcon(
+              ArchiveEntry(path: tab.document.path, size: 0, directory: false),
+              size: 16,
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 
@@ -4430,7 +4338,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget toolbar(bool desktopLayout) => LayoutBuilder(
     builder: (context, constraints) {
-      return Container(
+      return HiToolbar(
         key: const ValueKey('workspace-top-bar'),
         height: !desktopLayout && compactSearchOpen
             ? windowChromeHeight().clamp(
@@ -4438,105 +4346,97 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 double.infinity,
               )
             : windowChromeHeight(),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: BoxDecoration(
-          color: context.theme.colors.muted,
-          border: Border(
-            bottom: BorderSide(color: context.theme.colors.border),
-          ),
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          clipBehavior: Clip.none,
+        background: windowDragArea(const SizedBox.expand()),
+        center: Row(
           children: [
-            Positioned.fill(child: windowDragArea(const SizedBox.expand())),
-            Row(
-              children: [
-                windowLeadingControls(),
-                if (!desktop.supportsMenuBar) applicationMenu(),
-                Expanded(
-                  child: !desktopLayout && compactSearchOpen && document != null
-                      ? TapRegion(
-                          groupId: 'archive-search',
-                          child: CallbackShortcuts(
-                            bindings: {
-                              const SingleActivator(LogicalKeyboardKey.escape):
-                                  closeCompactSearch,
-                            },
-                            child: Row(
-                              children: [
-                                Expanded(child: searchField()),
-                                const SizedBox(width: 8),
-                                tool(
-                                  '关闭搜索',
-                                  CupertinoIcons.xmark,
-                                  closeCompactSearch,
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : Row(
+            windowLeadingControls(),
+            if (!desktop.supportsMenuBar) applicationMenu(),
+            Expanded(
+              child: !desktopLayout && compactSearchOpen && document != null
+                  ? TapRegion(
+                      groupId: 'archive-search',
+                      child: CallbackShortcuts(
+                        bindings: {
+                          const SingleActivator(LogicalKeyboardKey.escape):
+                              closeCompactSearch,
+                        },
+                        child: Row(
                           children: [
-                            tool(
-                              '返回',
-                              CupertinoIcons.chevron_left,
-                              busy || history.isEmpty ? null : goBack,
-                            ),
+                            Expanded(child: searchField()),
                             const SizedBox(width: 8),
-                            Expanded(
-                              child: document == null
-                                  ? windowDragArea(
-                                      const Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          'HiZip',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    )
-                                  : pathNavigation(),
+                            tool(
+                              '关闭搜索',
+                              CupertinoIcons.xmark,
+                              closeCompactSearch,
                             ),
-                            if (desktopLayout && document != null) ...[
-                              viewModeSelector(),
-                              const SizedBox(width: 8),
-                              tool(
-                                '预览栏',
-                                CupertinoIcons.sidebar_right,
-                                toggleInspector,
-                                active: inspector,
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            if (document != null)
-                              tool(
-                                '解压',
-                                CupertinoIcons.arrow_down_to_line,
-                                closing ? null : () => extract(),
-                              ),
-                            if (document != null) ...[
-                              const SizedBox(width: 8),
-                              TapRegion(
-                                groupId: 'archive-search',
-                                child: tool(
-                                  '搜索',
-                                  FIcons.search,
-                                  toggleSearch,
-                                  active:
-                                      compactSearchOpen ||
-                                      search.text.isNotEmpty,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            windowTrailingControls(),
                           ],
                         ),
-                ),
-              ],
+                      ),
+                    )
+                  : Row(
+                      children: [
+                        tool(
+                          '返回',
+                          CupertinoIcons.chevron_left,
+                          busy || history.isEmpty ? null : goBack,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: document == null
+                              ? windowDragArea(
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'HiZip',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : pathNavigation(),
+                        ),
+                        if (document != null &&
+                            !compactSearchOpen &&
+                            search.text.isNotEmpty) ...[
+                          const SizedBox(width: HiSpace.sm),
+                          searchFilterChip(),
+                        ],
+                        if (desktopLayout && document != null) ...[
+                          viewModeSelector(),
+                          const SizedBox(width: 8),
+                          tool(
+                            '预览栏',
+                            CupertinoIcons.sidebar_right,
+                            toggleInspector,
+                            active: inspector,
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        if (document != null)
+                          tool(
+                            '解压',
+                            CupertinoIcons.arrow_down_to_line,
+                            closing ? null : () => extract(),
+                          ),
+                        if (document != null) ...[
+                          const SizedBox(width: 8),
+                          TapRegion(
+                            groupId: 'archive-search',
+                            child: tool(
+                              '搜索',
+                              FIcons.search,
+                              toggleSearch,
+                              active:
+                                  compactSearchOpen || search.text.isNotEmpty,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        windowTrailingControls(),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -4544,7 +4444,19 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     },
   );
 
-  Widget desktopSearchBar() => FCard.raw(
+  /// Shown while a query filters the folder but the search field is closed.
+  Widget searchFilterChip() => KeyedSubtree(
+    key: const ValueKey('search-filter-chip'),
+    child: HiFilterChip(
+      label: search.text,
+      clearTooltip: appText(context, '清除搜索'),
+      onClear: () => setState(search.clear),
+    ),
+  );
+
+  Widget desktopSearchBar() => HiFloatingPanel(
+    padding: EdgeInsets.zero,
+    maxWidth: double.infinity,
     key: const ValueKey('workspace-search-bar'),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -4657,17 +4569,11 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
-  Widget emptyWorkspace() => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        AppText('未打开压缩包', style: TextStyle(color: muted, fontSize: 13)),
-        const SizedBox(height: 14),
-        DesktopButton(
-          onPressed: busy ? null : pickArchive,
-          child: const AppText('打开压缩包'),
-        ),
-      ],
+  Widget emptyWorkspace() => HiEmptyState(
+    message: appText(context, '未打开压缩包'),
+    action: DesktopButton(
+      onPressed: busy ? null : pickArchive,
+      child: const AppText('打开压缩包'),
     ),
   );
 
@@ -4695,7 +4601,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              crumb(p.basename(document!.path), () => navigate('')),
+              crumb(p.basename(document!.path), () => openFolder('')),
               for (
                 var i = 0;
                 i < (folder.isEmpty ? 0 : folder.split('/').length);
@@ -4704,7 +4610,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                 Icon(CupertinoIcons.chevron_right, size: 9, color: muted),
                 crumb(
                   folder.split('/')[i],
-                  () => navigate(folder.split('/').take(i + 1).join('/')),
+                  () => openFolder(folder.split('/').take(i + 1).join('/')),
                 ),
               ],
             ],
@@ -4857,7 +4763,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Container(
-                            height: 27,
+                            height: HiSize.header,
                             color: context.theme.colors.muted,
                             padding: EdgeInsets.symmetric(
                               horizontal: rowPadding + listInset,
@@ -4976,8 +4882,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
               color: selectedPaths.contains(e.path)
                   ? entryForeground(e)
                   : e.directory
-                  ? const Color(0xff6d9cbe)
-                  : const Color(0xff858b92),
+                  ? HiColors.folder
+                  : HiColors.document,
             )
           : Image.memory(
               snapshot.data!,
@@ -5015,7 +4921,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     return SizedBox(
       key: ValueKey('list-header-$column'),
       width: width,
-      height: 27,
+      height: HiSize.header,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -5322,9 +5228,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                       key: ValueKey('grid-icon-background-${e.path}'),
                       decoration: BoxDecoration(
                         color: selectedPaths.contains(e.path)
-                            ? const Color(0x33808080)
+                            ? HiColors.iconPlate
                             : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: HiRadius.surfaceAll,
                       ),
                       child: Padding(
                         key: iconRegion,
@@ -5345,7 +5251,7 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
                                     settings.selectionHighlight,
                                   )
                                 : Colors.transparent,
-                            borderRadius: BorderRadius.circular(5),
+                            borderRadius: HiRadius.controlAll,
                           ),
                           child: Padding(
                             key: nameRegion,
@@ -5547,13 +5453,8 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget selectionStrip() => Container(
+  Widget selectionStrip() => HiBottomStrip(
     key: const ValueKey('selection-strip'),
-    height: _selectionStripHeight,
-    padding: const EdgeInsets.symmetric(horizontal: 12),
-    decoration: BoxDecoration(
-      border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-    ),
     child: LayoutBuilder(
       builder: (context, bounds) => Row(
         children: [
@@ -6094,37 +5995,11 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     );
   }
 
-  Widget info(String label, String value, {bool literal = false}) => Container(
-    decoration: BoxDecoration(
-      border: Border(
-        bottom: BorderSide(color: Theme.of(context).dividerColor, width: .5),
-      ),
-    ),
-    padding: const EdgeInsets.symmetric(vertical: 5),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 65,
-          child: AppText(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: context.theme.colors.mutedForeground,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            literal
-                ? value
-                : translateAppText(value, settings.locale.languageCode),
-            textAlign: TextAlign.right,
-            style: const TextStyle(fontSize: 11, height: 1.5),
-          ),
-        ),
-      ],
-    ),
+  Widget info(String label, String value, {bool literal = false}) => HiInfoRow(
+    label: appText(context, label),
+    value: literal
+        ? value
+        : translateAppText(value, settings.locale.languageCode),
   );
   Widget previewContent({bool large = false, bool centerImage = false}) {
     final e = selected;
@@ -6260,7 +6135,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
     ),
   );
 
-  Widget confirmationPanel(TaskFeedback data) => FCard.raw(
+  Widget confirmationPanel(TaskFeedback data) => HiFloatingPanel(
+    padding: EdgeInsets.zero,
+    maxWidth: double.infinity,
     key: const ValueKey('inline-task-actions'),
     child: Padding(
       padding: const EdgeInsets.all(16),
@@ -6310,7 +6187,9 @@ class _ArchiveWorkspaceState extends State<ArchiveWorkspace>
 
   Widget taskQueuePanel() {
     final tasks = taskQueue.tasks;
-    return FCard.raw(
+    return HiFloatingPanel(
+      padding: EdgeInsets.zero,
+      maxWidth: double.infinity,
       key: const ValueKey('archive-task-queue'),
       child: tasks.isEmpty
           ? const Padding(

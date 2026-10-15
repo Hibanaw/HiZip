@@ -18,6 +18,10 @@ dependencies:
   open_filex: ^4.7.0
   hizip_native:
     path: packages/hizip_native
+  hiwidget:
+    git:
+      url: https://github.com/Hibanaw/HiWidget.git
+      ref: main
   super_drag_and_drop: ^0.9.1
   super_clipboard: ^0.9.1
   forui: ^0.21.3
