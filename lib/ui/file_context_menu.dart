@@ -161,6 +161,13 @@ class _FileContextMenuState extends State<FileContextMenu>
     WidgetsBinding.instance.addObserver(this);
   }
 
+  /// One controller per menu level. Without them every level would share the
+  /// route's primary controller and a scrolling submenu would draw its thumb
+  /// in its parent as well.
+  final scrolls = <String, ScrollController>{};
+  ScrollController scrollFor(String key) =>
+      scrolls.putIfAbsent(key, ScrollController.new);
+
   @override
   void didChangeMetrics() => close();
   @override
@@ -169,6 +176,9 @@ class _FileContextMenuState extends State<FileContextMenu>
     ++request;
     if (opened == this) opened = null;
     WidgetsBinding.instance.removeObserver(this);
+    for (final scroll in scrolls.values) {
+      scroll.dispose();
+    }
     controller.dispose();
     menuFocus.dispose();
     super.dispose();
@@ -419,6 +429,7 @@ class _FileContextMenuState extends State<FileContextMenu>
                 FSubmenuItem(
                   title: const AppText('其他应用'),
                   submenu: externalAppItems(),
+                  submenuScrollController: scrollFor('other-apps'),
                   submenuStyle: boundedMenuStyle,
                   submenuMaxHeight: menuViewport.height,
                   submenuIntrinsicWidth: false,
@@ -426,23 +437,49 @@ class _FileContextMenuState extends State<FileContextMenu>
             ],
           ),
         ];
-  FItemMixin actionItem(DesktopMenuAction action) => action.children == null
+
+  /// Width reserved for the check mark. A menu level whose items include a
+  /// checked one reserves it on every sibling, so labels stay aligned whether
+  /// or not they carry the mark.
+  static const double checkGutter = 20;
+
+  FItemMixin actionItem(
+    DesktopMenuAction action, {
+    bool gutter = false,
+    String path = 'menu',
+  }) => action.children == null
       ? item(
           action.title,
           action.onPressed,
           shortcut: action.shortcut,
-          icon: action.checked ? const Icon(Icons.check, size: 14) : null,
+          icon: gutter
+              ? SizedBox(
+                  width: checkGutter,
+                  child: action.checked
+                      ? const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Icon(Icons.check, size: 14),
+                        )
+                      : null,
+                )
+              : null,
         )
       : FSubmenuItem(
+          prefix: gutter ? const SizedBox(width: checkGutter) : null,
           title: AppText(action.title),
           enabled: action.enabled,
-          submenu: actionGroups(action.children!),
+          submenu: actionGroups(action.children!, '$path/${action.title}'),
+          submenuScrollController: scrollFor('$path/${action.title}'),
           submenuStyle: boundedMenuStyle,
           submenuMaxHeight: menuViewport.height,
           submenuIntrinsicWidth: false,
         );
 
-  List<FItemGroupMixin> actionGroups(List<DesktopMenuAction> actions) {
+  List<FItemGroupMixin> actionGroups(
+    List<DesktopMenuAction> actions, [
+    String path = 'menu',
+  ]) {
+    final gutter = actions.any((action) => action.checked);
     final groups = <FItemGroupMixin>[];
     var items = <FItemMixin>[];
     for (final action in actions) {
@@ -450,7 +487,7 @@ class _FileContextMenuState extends State<FileContextMenu>
         if (items.isNotEmpty) groups.add(FItemGroup(children: items));
         items = [];
       } else {
-        items.add(actionItem(action));
+        items.add(actionItem(action, gutter: gutter, path: path));
       }
     }
     if (items.isNotEmpty) groups.add(FItemGroup(children: items));
@@ -476,6 +513,7 @@ class _FileContextMenuState extends State<FileContextMenu>
               FSubmenuItem(
                 title: const AppText('打开方式'),
                 submenu: appItems(),
+                submenuScrollController: scrollFor('open-with'),
                 submenuStyle: boundedMenuStyle,
                 submenuMaxHeight: menuViewport.height,
                 submenuIntrinsicWidth: false,
@@ -531,6 +569,7 @@ class _FileContextMenuState extends State<FileContextMenu>
       },
     ),
     menu: menu(),
+    scrollController: scrollFor('menu'),
     autofocus: true,
     focusNode: menuFocus,
     intrinsicWidth: false,

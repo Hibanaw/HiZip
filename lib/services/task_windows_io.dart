@@ -165,6 +165,10 @@ Future<Widget?> initializeTaskWindows() async {
       configureAuxiliaryDialogWindow(
         kind,
         Map<String, dynamic>.from(request['bounds'] as Map),
+        title: auxiliaryDialogTitle(
+          kind,
+          Map<String, dynamic>.from(request['data'] as Map),
+        ),
       );
       final selection = <String, dynamic>{};
       try {
@@ -839,6 +843,7 @@ class _TaskWindowApp extends StatelessWidget {
         child: ValueListenableBuilder<TaskFeedback>(
           valueListenable: state,
           builder: (context, data, _) => DesktopDialog(
+            showTitle: true,
             title: AppText(data.title),
             content: AppText(
               data.detail,

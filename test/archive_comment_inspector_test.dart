@@ -251,7 +251,7 @@ void main() {
     AppText label(String text) => tester.widget<AppText>(
       find.ancestor(of: find.text(text), matching: find.byType(AppText)).first,
     );
-    expect(label('注释').style, label('状态').style);
+    expect(label('注释').style, tester.widget<Text>(find.text('状态')).style);
     expect(
       tester.widget<Text>(find.byKey(content)).style,
       tester.widget<Text>(find.text('可写入')).style,

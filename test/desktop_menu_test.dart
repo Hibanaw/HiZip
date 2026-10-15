@@ -8,6 +8,8 @@ import 'package:hizip/ui/desktop_widgets.dart';
 import 'package:forui/forui.dart';
 
 void main() {
+  checkAlignmentTests();
+  submenuScrollTests();
   testWidgets('pointer menus stay inside the window at every edge', (
     tester,
   ) async {
@@ -242,4 +244,90 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+}
+
+void checkAlignmentTests() {
+  testWidgets('a checked item does not push sibling labels right', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: foruiBuilder,
+        theme: desktopTheme(),
+        home: Scaffold(
+          body: FileContextMenu(
+            primaryClick: true,
+            actions: [
+              DesktopMenuAction('Grid', () {}),
+              DesktopMenuAction('List', () {}, checked: true),
+              const DesktopMenuAction.separator(),
+              DesktopMenuAction(
+                'Sort',
+                null,
+                children: [DesktopMenuAction('Name', () {})],
+              ),
+            ],
+            child: const SizedBox(width: 80, height: 32, child: Text('menu')),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('menu'));
+    await tester.pumpAndSettle();
+    final grid = tester.getTopLeft(find.text('Grid')).dx;
+    expect(tester.getTopLeft(find.text('List')).dx, grid);
+    expect(tester.getTopLeft(find.text('Sort')).dx, grid);
+    expect(find.byIcon(Icons.check), findsOneWidget);
+    expect(tester.getTopLeft(find.byIcon(Icons.check)).dx, lessThan(grid));
+  });
+}
+
+void submenuScrollTests() {
+  testWidgets('each menu level scrolls with its own controller', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 220);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        scrollBehavior: const DesktopScrollBehavior(),
+        builder: foruiBuilder,
+        theme: desktopTheme(),
+        home: Scaffold(
+          body: FileContextMenu(
+            primaryClick: true,
+            actions: [
+              DesktopMenuAction(
+                'Tools',
+                null,
+                children: [
+                  for (var i = 0; i < 24; i++)
+                    DesktopMenuAction('Sub $i', () {}),
+                ],
+              ),
+              DesktopMenuAction('Other', () {}),
+            ],
+            child: const SizedBox(width: 80, height: 32, child: Text('menu')),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tools'));
+    await tester.pumpAndSettle();
+    final controllers = tester
+        .widgetList<Scrollbar>(find.byType(Scrollbar))
+        .map((bar) => bar.controller)
+        .toList();
+    expect(controllers, isNotEmpty);
+    for (final controller in controllers) {
+      // A controller shared between levels would hold the submenu's position
+      // too, which makes the parent menu paint the submenu's scrollbar.
+      expect(controller?.positions.length, 1);
+    }
+    expect(tester.takeException(), isNull);
+  });
 }

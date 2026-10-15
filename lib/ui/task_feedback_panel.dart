@@ -1,3 +1,5 @@
+import 'package:hiwidget/hiwidget.dart';
+
 import 'app_localizations.dart';
 
 import 'package:flutter/material.dart';
@@ -24,7 +26,11 @@ class TaskFeedbackPanel extends StatelessWidget {
     height: 216,
     child: inWindow
         ? panelContent(context)
-        : FCard.raw(child: panelContent(context)),
+        : HiFloatingPanel(
+            padding: EdgeInsets.zero,
+            maxWidth: double.infinity,
+            child: panelContent(context),
+          ),
   );
 
   Widget panelContent(BuildContext context) => Padding(

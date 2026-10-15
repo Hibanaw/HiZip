@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
+import 'package:hiwidget/hiwidget.dart';
 
 import '../models/selection_highlight.dart';
 import '../models/theme_accent.dart';
@@ -59,9 +60,12 @@ FThemeData _desktopForuiTheme(
     style: FStyle.inherit(colors: colors, typography: typography, touch: false)
         .copyWith(
           borderRadius: const FBorderRadius(
-            xs: BorderRadius.all(Radius.circular(5)),
-            sm: BorderRadius.all(Radius.circular(5)),
-            md: BorderRadius.all(Radius.circular(5)),
+            xs: HiRadius.controlAll,
+            sm: HiRadius.controlAll,
+            // Floating surfaces (cards, popovers, dialogs) share one radius.
+            md: HiRadius.surfaceAll,
+            lg: HiRadius.surfaceAll,
+            xl: HiRadius.surfaceAll,
           ),
         ),
   );
@@ -70,14 +74,35 @@ FThemeData _desktopForuiTheme(
 final desktopForuiTheme = _desktopForuiTheme(Brightness.light);
 final desktopForuiDarkTheme = _desktopForuiTheme(Brightness.dark);
 
-Widget foruiBuilder(BuildContext context, Widget? child) => FTheme(
-  data: _desktopForuiTheme(
-    Theme.of(context).brightness,
-    accent: Theme.of(context).colorScheme.primary,
-    onAccent: Theme.of(context).colorScheme.onPrimary,
-  ),
-  child: child ?? const SizedBox(),
-);
+Widget foruiBuilder(BuildContext context, Widget? child) {
+  final theme = Theme.of(context);
+  final data = _desktopForuiTheme(
+    theme.brightness,
+    accent: theme.colorScheme.primary,
+    onAccent: theme.colorScheme.onPrimary,
+  );
+  final colors = data.colors;
+  return FTheme(
+    data: data,
+    // HiWidget layouts read the same colours as the Forui widgets.
+    child: HiTheme(
+      palette: HiPalette(
+        background: colors.background,
+        panel: colors.muted,
+        card: colors.card,
+        border: colors.border,
+        foreground: colors.foreground,
+        mutedForeground: colors.mutedForeground,
+        selection: colors.secondary,
+        accent: theme.colorScheme.primary,
+        onAccent: theme.colorScheme.onPrimary,
+        error: theme.colorScheme.error,
+        brightness: theme.brightness,
+      ),
+      child: child ?? const SizedBox(),
+    ),
+  );
+}
 
 /// Inputs reserve six pixels above and below the scaled text line.
 double desktopInputHeight(
@@ -112,12 +137,12 @@ class DesktopButton extends StatelessWidget {
     this.flat = false,
     this.primary = false,
     this.active = false,
-    this.minHeight = 28,
+    this.minHeight = HiSize.control,
     this.padding = const EdgeInsets.symmetric(horizontal: 10),
     this.tooltip,
     this.foreground,
     this.focusNode,
-    this.borderRadius = const BorderRadius.all(Radius.circular(5)),
+    this.borderRadius = HiRadius.controlAll,
   });
   final Widget child;
   final VoidCallback? onPressed;
@@ -241,7 +266,7 @@ class DesktopIconButton extends StatelessWidget {
     this.onPressed,
     this.tooltip,
     this.active = false,
-    this.borderRadius = const BorderRadius.all(Radius.circular(5)),
+    this.borderRadius = HiRadius.controlAll,
   });
   final Widget icon;
   final VoidCallback? onPressed;
@@ -601,16 +626,24 @@ class DesktopDialog extends StatelessWidget {
     this.content,
     required this.actions,
     this.maxWidth = 460,
+    this.showTitle,
   });
   final Widget title;
   final Widget? content;
   final List<Widget> actions;
   final double maxWidth;
+
+  /// Whether the title is drawn in the content. Dialog windows carry it in the
+  /// native frame, like settings and properties, so by default it is hidden
+  /// there. Pass true when the title is a message rather than a label.
+  final bool? showTitle;
+
   @override
   Widget build(BuildContext context) {
     final inWindow =
         context.dependOnInheritedWidgetOfExactType<DesktopDialogScope>() !=
         null;
+    final titled = showTitle ?? !inWindow;
     if (inWindow || MediaQuery.sizeOf(context).width < 800) {
       return Material(
         key: const ValueKey('auxiliary-fullscreen-dialog'),
@@ -620,38 +653,10 @@ class DesktopDialog extends StatelessWidget {
             padding: EdgeInsets.only(
               bottom: MediaQuery.viewInsetsOf(context).bottom,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: DefaultTextStyle.merge(
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: context.theme.colors.foreground,
-                    ),
-                    child: title,
-                  ),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
-                    child: content ?? const SizedBox.shrink(),
-                  ),
-                ),
-                const Divider(height: 1),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: actions,
-                  ),
-                ),
-              ],
+            child: HiDialogFrame(
+              title: titled ? title : null,
+              actions: actions,
+              child: content ?? const SizedBox.shrink(),
             ),
           ),
         ),
@@ -684,9 +689,26 @@ class DesktopScrollBehavior extends MaterialScrollBehavior {
     BuildContext context,
     Widget child,
     ScrollableDetails details,
-  ) => axisDirectionToAxis(details.direction) == Axis.horizontal
-      ? child
-      : Scrollbar(controller: details.controller, child: child);
+  ) {
+    if (axisDirectionToAxis(details.direction) == Axis.horizontal) return child;
+    final controller = details.controller;
+    return Scrollbar(
+      controller: controller,
+      // Menus and popovers open nested scrollables (a submenu inside its parent
+      // menu) whose notifications also bubble up here. React only to the
+      // scrollable this bar belongs to.
+      notificationPredicate: (notification) {
+        if (notification.depth != 0) return false;
+        if (controller == null) return true;
+        final context = notification.context;
+        final position = context == null
+            ? null
+            : Scrollable.maybeOf(context)?.position;
+        return position != null && controller.positions.contains(position);
+      },
+      child: child,
+    );
+  }
 }
 
 ThemeData desktopTheme({
@@ -761,27 +783,23 @@ ThemeData desktopTheme({
         borderRadius: BorderRadius.all(Radius.circular(5)),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
-        borderSide: BorderSide(
-          color: dark ? const Color(0xff55565c) : const Color(0xffc7c8cd),
-        ),
+        borderRadius: HiRadius.controlAll,
+        borderSide: BorderSide(color: HiColors.inputBorder(brightness)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
+        borderRadius: HiRadius.controlAll,
         borderSide: BorderSide(color: controlAccent),
       ),
       disabledBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
-        borderSide: BorderSide(
-          color: dark ? const Color(0xff414248) : const Color(0xffdedee2),
-        ),
+        borderRadius: HiRadius.controlAll,
+        borderSide: BorderSide(color: HiColors.inputBorderDisabled(brightness)),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
+        borderRadius: HiRadius.controlAll,
         borderSide: BorderSide(color: scheme.error),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
+        borderRadius: HiRadius.controlAll,
         borderSide: BorderSide(color: scheme.error),
       ),
     ),
@@ -811,7 +829,7 @@ ThemeData desktopTheme({
       decoration: BoxDecoration(
         color: neutral.card,
         border: Border.all(color: neutral.border),
-        borderRadius: const BorderRadius.all(Radius.circular(5)),
+        borderRadius: HiRadius.controlAll,
       ),
     ),
     scrollbarTheme: ScrollbarThemeData(
@@ -826,9 +844,7 @@ ThemeData desktopTheme({
     dialogTheme: DialogThemeData(
       backgroundColor: surface,
       surfaceTintColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(8)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: HiRadius.surfaceAll),
     ),
     drawerTheme: DrawerThemeData(
       backgroundColor: surface,

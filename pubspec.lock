@@ -316,6 +316,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.9"
+  hiwidget:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      resolved-ref: b096f2df8ab5fafecfdb0d40bc02eaec348c2efa
+      url: "https://github.com/Hibanaw/HiWidget.git"
+    source: git
+    version: "0.1.0"
   hizip_native:
     dependency: "direct main"
     description:

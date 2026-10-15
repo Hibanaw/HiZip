@@ -4,6 +4,9 @@ import 'package:flutter/rendering.dart';
 
 import 'desktop_widgets.dart';
 import 'file_selection_area.dart';
+
+import 'package:hiwidget/hiwidget.dart';
+
 import '../models/selection_highlight.dart';
 
 /// Select on the first pointer down. Activate on the second pointer up without
@@ -106,10 +109,10 @@ class _FileItemSurfaceState extends State<FileItemSurface> {
             borderRadius: BorderRadius.vertical(
               top: widget.selected && widget.joinPrevious
                   ? Radius.zero
-                  : const Radius.circular(5),
+                  : const Radius.circular(HiRadius.control),
               bottom: widget.selected && widget.joinNext
                   ? Radius.zero
-                  : const Radius.circular(5),
+                  : const Radius.circular(HiRadius.control),
             ),
             color: widget.selected && widget.paintSelection
                 ? widget.activeSelection
@@ -117,7 +120,7 @@ class _FileItemSurfaceState extends State<FileItemSurface> {
                           context,
                           widget.selectionHighlight,
                         )
-                      : desktopColor(context, 0xffededee, 0xff333438)
+                      : HiColors.inactiveSelection(Theme.of(context).brightness)
                 : Colors.transparent,
           ),
           child: widget.selected && widget.joinNext
@@ -135,8 +138,10 @@ class _FileItemSurfaceState extends State<FileItemSurface> {
                             widget.activeSelection &&
                                 widget.selectionHighlight ==
                                     SelectionHighlight.blue
-                            ? const Color(0x40ffffff)
-                            : desktopColor(context, 0xffc9cacf, 0xff5c5d63),
+                            ? HiColors.selectionDividerOnAccent
+                            : HiColors.selectionDivider(
+                                Theme.of(context).brightness,
+                              ),
                         child: const SizedBox(height: .5),
                       ),
                     ),

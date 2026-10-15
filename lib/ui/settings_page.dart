@@ -1,3 +1,5 @@
+import 'package:hiwidget/hiwidget.dart';
+
 import '../models/app_language.dart';
 import '../models/auxiliary_window_mode.dart';
 import 'app_localizations.dart';
@@ -72,10 +74,7 @@ class _SettingsPageState extends State<SettingsPage>
   }) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      AppText(
-        title,
-        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-      ),
+      AppText(title, style: HiText.sectionLabel),
       const SizedBox(height: 8),
       DesktopSelect<String>(
         value: value,
@@ -101,6 +100,13 @@ class _SettingsPageState extends State<SettingsPage>
       ),
     ],
   );
+
+  /// Explanation under a control: muted, relaxed line height.
+  Widget helpText(String text) => AppText(
+    text,
+    style: HiText.help.copyWith(color: context.theme.colors.mutedForeground),
+  );
+
   String get systemLanguageCode =>
       resolveAppLocale(WidgetsBinding.instance.platformDispatcher.locale)
           .languageCode;
@@ -147,13 +153,7 @@ class _SettingsPageState extends State<SettingsPage>
                       child: windowDragArea(
                         const Align(
                           alignment: Alignment.centerLeft,
-                          child: AppText(
-                            '设置',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                          child: AppText('设置', style: HiText.sectionLabel),
                         ),
                       ),
                     ),
@@ -170,482 +170,324 @@ class _SettingsPageState extends State<SettingsPage>
                       : (constraints.maxWidth < 500 ? 116.0 : 150.0);
                   final content = ListenableBuilder(
                     listenable: settings,
-                    builder: (_, _) => SingleChildScrollView(
-                      padding: const EdgeInsets.all(20),
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minWidth: (constraints.maxWidth - 40).clamp(
-                              0.0,
-                              560.0,
-                            ),
-                            maxWidth: 560,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                    builder: (_, _) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (appearance) ...[
+                          AppText('外观', style: HiText.pageTitle),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
                             children: [
-                              if (appearance) ...[
-                                const AppText(
-                                  '外观',
-                                  style: TextStyle(
-                                    fontSize: 21,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final mode in ThemeMode.values)
-                                      DesktopButton(
-                                        active: settings.themeMode == mode,
-                                        onPressed: settings.saving
-                                            ? null
-                                            : () => settings.setThemeMode(mode),
-                                        child: mode == ThemeMode.system
-                                            ? Text(
-                                                translateAppText(
-                                                  '跟随系统',
-                                                  systemLanguageCode,
-                                                ),
-                                              )
-                                            : AppText(
-                                                mode == ThemeMode.light
-                                                    ? '浅色'
-                                                    : '深色',
-                                              ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 24),
-                                const AppText(
-                                  '语言',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                AppLanguageScope(
-                                  languageCode: systemLanguageCode,
-                                  child: DesktopSelect<AppLanguage>(
-                                    key: const ValueKey('language-select'),
-                                    value: settings.language,
-                                    items: {
-                                      for (final value in AppLanguage.values)
-                                        value.label: value,
-                                    },
-                                    onChanged: settings.saving
-                                        ? null
-                                        : settings.setLanguage,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                const AppText(
-                                  '语言设置自动保存，立即生效。',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                                const SizedBox(height: 24),
-                                const AppText(
-                                  '主题色',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final value in ThemeAccent.values)
-                                      DesktopButton(
-                                        active: settings.accent == value,
-                                        onPressed: settings.saving
-                                            ? null
-                                            : () => settings.setAccent(value),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            if (settings.accent == value)
-                                              const Icon(
-                                                CupertinoIcons.check_mark,
-                                                size: 14,
-                                              )
-                                            else
-                                              DecoratedBox(
-                                                decoration: BoxDecoration(
-                                                  color: value.colorFor(
-                                                    Theme.of(context)
-                                                        .brightness,
-                                                  ),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const SizedBox(
-                                                  width: 14,
-                                                  height: 14,
-                                                ),
-                                              ),
-                                            const SizedBox(width: 6),
-                                            AppText(value.label),
-                                          ],
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                AppText(
-                                  '主题色用于主要按钮、文件选择和交互高亮，立即生效。',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    height: 1.6,
-                                    color: context.theme.colors.mutedForeground,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                Wrap(
-                                  children: [
-                                    const AppText(
-                                      '界面 DPI',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    AppText(
-                                      '：${(settings.dpiScale * 100).round()}%',
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                DesktopSlider(
-                                  value: settings.dpiScale,
-                                  min: .75,
-                                  max: 1.5,
-                                  divisions: 15,
-                                  onChanged: settings.saving
-                                      ? null
-                                      : settings.setDpiScale,
-                                ),
-                                const AppText(
-                                  '调整界面文字大小，重启应用后仍会保留。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                                const SizedBox(height: 24),
-                                const AppText(
-                                  '辅助窗口显示方式',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                DesktopSelect<AuxiliaryWindowMode>(
-                                  key: const ValueKey('window-mode-select'),
-                                  value: settings.windowMode,
-                                  items: const {
-                                    '画面内显示': AuxiliaryWindowMode.inline,
-                                    '独立窗口显示': AuxiliaryWindowMode.separate,
-                                  },
-                                  onChanged: settings.saving
-                                      ? null
-                                      : settings.setWindowMode,
-                                ),
-                                const SizedBox(height: 8),
-                                const AppText(
-                                  '控制设置、属性和对话框的显示位置。任务进度和结果始终显示在下方状态栏。紧凑布局下对话框全屏显示。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                              ],
-                              if (section == 'archive') ...[
-                                const AppText(
-                                  '压缩包',
-                                  style: TextStyle(
-                                    fontSize: 21,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                encodingPicker(
-                                  title: '读取默认文件名编码',
-                                  value: settings.archive.readEncoding,
-                                  creating: false,
-                                ),
-                                const SizedBox(height: 8),
-                                const AppText(
-                                  '自动识别优先使用压缩包声明的编码。文件名乱码时，可在“文件 → 编码”中切换当前压缩包的编码。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                                const SizedBox(height: 24),
-                                encodingPicker(
-                                  title: '创建 ZIP 的文件名编码',
-                                  value: settings.archive.createEncoding,
-                                  creating: true,
-                                ),
-                                const AppText(
-                                  '建议使用 UTF-8。此设置用于新建 ZIP，不改变文件内容的编码。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                                const SizedBox(height: 24),
-                                AppText(
-                                  '创建 ZIP 的压缩等级：${settings.archive.compressionLevel == 0 ? "不压缩" : settings.archive.compressionLevel}',
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                DesktopSlider(
-                                  value: settings.archive.compressionLevel
-                                      .toDouble(),
-                                  min: 0,
-                                  max: 9,
-                                  divisions: 9,
-                                  onChanged: settings.saving
-                                      ? null
-                                      : (value) => settings.setArchive(
-                                          ArchivePreferences(
-                                            readEncoding:
-                                                settings.archive.readEncoding,
-                                            createEncoding:
-                                                settings.archive.createEncoding,
-                                            compressionLevel: value.round(),
-                                          ),
-                                        ),
-                                ),
-                                const AppText(
-                                  '0 不压缩，1 更快，9 压缩率更高。设置自动保存，下次创建时生效。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                              ],
-                              if (section == 'general') ...[
-                                const AppText(
-                                  '通用',
-                                  style: TextStyle(
-                                    fontSize: 21,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 28),
-                                const AppText(
-                                  '文件关联',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                const AppText(
-                                  '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
-                                  style: TextStyle(fontSize: 12, height: 1.6),
-                                ),
-                                const SizedBox(height: 16),
+                              for (final mode in ThemeMode.values)
                                 DesktopButton(
-                                  onPressed:
-                                      associating ||
-                                          !DesktopIntegration()
-                                              .supportsDefaultApplication
+                                  active: settings.themeMode == mode,
+                                  onPressed: settings.saving
                                       ? null
-                                      : () async {
-                                          setState(() {
-                                            associating = true;
-                                            associationResult = null;
-                                          });
-                                          try {
-                                            await DesktopIntegration()
-                                                .setDefaultArchiveHandler();
-                                            if (mounted) {
-                                              setState(
-                                                () => associationResult =
-                                                    '已设为默认打开方式',
-                                              );
-                                            }
-                                          } catch (error) {
-                                            if (mounted) {
-                                              setState(
-                                                () => associationResult =
-                                                    '设置失败：$error',
-                                              );
-                                            }
-                                          } finally {
-                                            if (mounted) {
-                                              setState(
-                                                () => associating = false,
-                                              );
-                                            }
-                                          }
-                                        },
-                                  child: const AppText('设为默认打开方式'),
-                                ),
-                                if (DesktopIntegration().supportsQuickLook) ...[
-                                  const SizedBox(height: 24),
-                                  const AppText('Finder 右键菜单'),
-                                  const SizedBox(height: 10),
-                                  const AppText(
-                                    '启用 HiZip Finder 扩展后，可在文件右键菜单中创建压缩包或快速创建 ZIP。',
-                                  ),
-                                  const SizedBox(height: 12),
-                                  DesktopButton(
-                                    onPressed: () async {
-                                      try {
-                                        await DesktopIntegration()
-                                            .showFinderExtensionSettings();
-                                      } catch (error) {
-                                        if (mounted) {
-                                          setState(
-                                            () => associationResult =
-                                                '设置失败：$error',
-                                          );
-                                        }
-                                      }
-                                    },
-                                    child: const AppText('管理 Finder 扩展'),
-                                  ),
-                                ],
-                                if (associationResult != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 12),
-                                    child: AppText(
-                                      associationResult!,
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                              ],
-                              if (section == 'performance') ...[
-                                const AppText(
-                                  '性能',
-                                  style: TextStyle(
-                                    fontSize: 21,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 28),
-                                const AppText(
-                                  '解压线程数',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final value in <int?>[null, 1, 2, 4])
-                                      DesktopButton(
-                                        active:
-                                            settings.extractionWorkers == value,
-                                        onPressed: settings.saving
-                                            ? null
-                                            : () => settings
-                                                  .setExtractionWorkers(value),
-                                        child: AppText(
-                                          value == null ? '自动' : '$value 个线程',
+                                      : () => settings.setThemeMode(mode),
+                                  child: mode == ThemeMode.system
+                                      ? Text(
+                                          translateAppText(
+                                            '跟随系统',
+                                            systemLanguageCode,
+                                          ),
+                                        )
+                                      : AppText(
+                                          mode == ThemeMode.light ? '浅色' : '深色',
                                         ),
-                                      ),
-                                  ],
                                 ),
-                                const SizedBox(height: 16),
-                                AppText(
-                                  '自动根据处理器数量分配，最多使用 4 个线程。更多线程适合包含多个大文件的 ZIP；减少线程可降低 CPU 和磁盘占用。',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    height: 1.6,
-                                    color: context.theme.colors.mutedForeground,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                AppText(
-                                  '自动模式下，小压缩包使用单线程。单文件及不适合并行解压的格式使用顺序读取。设置自动保存，下次解压时生效。',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    height: 1.6,
-                                    color: context.theme.colors.mutedForeground,
-                                  ),
-                                ),
-                              ],
-                              if (settings.error != null) ...[
-                                const SizedBox(height: 16),
-                                AppText(
-                                  settings.error!,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Theme.of(context).colorScheme.error,
-                                  ),
-                                ),
-                              ],
                             ],
                           ),
-                        ),
-                      ),
-                    ),
-                  );
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        width: sidebarWidth,
-                        decoration: BoxDecoration(
-                          color: context.theme.colors.muted,
-                          border: Border(
-                            right: BorderSide(
-                              color: context.theme.colors.border,
+                          SizedBox(height: HiSpace.xl),
+                          AppText('语言', style: HiText.sectionLabel),
+                          const SizedBox(height: 12),
+                          AppLanguageScope(
+                            languageCode: systemLanguageCode,
+                            child: DesktopSelect<AppLanguage>(
+                              key: const ValueKey('language-select'),
+                              value: settings.language,
+                              items: {
+                                for (final value in AppLanguage.values)
+                                  value.label: value,
+                              },
+                              onChanged: settings.saving
+                                  ? null
+                                  : settings.setLanguage,
                             ),
                           ),
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          children: [
-                            for (final category in [
-                              'general',
-                              'appearance',
-                              'archive',
-                              'performance',
-                            ])
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: DesktopButton(
-                                  flat: true,
-                                  active: section == category,
-                                  onPressed: () =>
-                                      setState(() => section = category),
+                          const SizedBox(height: 8),
+                          helpText('语言设置自动保存，立即生效。'),
+                          SizedBox(height: HiSpace.xl),
+                          AppText('主题色', style: HiText.sectionLabel),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final value in ThemeAccent.values)
+                                DesktopButton(
+                                  active: settings.accent == value,
+                                  onPressed: settings.saving
+                                      ? null
+                                      : () => settings.setAccent(value),
                                   child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(switch (category) {
-                                        'general' => CupertinoIcons.gear,
-                                        'appearance' =>
-                                          CupertinoIcons.paintbrush,
-                                        'archive' => CupertinoIcons.archivebox,
-                                        _ => CupertinoIcons.speedometer,
-                                      }, size: 16),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: AppText(
-                                          switch (category) {
-                                            'general' => '通用',
-                                            'appearance' => '外观',
-                                            'archive' => '压缩包',
-                                            _ => '性能',
-                                          },
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 12),
+                                      if (settings.accent == value)
+                                        const Icon(
+                                          CupertinoIcons.check_mark,
+                                          size: 14,
+                                        )
+                                      else
+                                        DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            color: value.colorFor(
+                                              Theme.of(context).brightness,
+                                            ),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const SizedBox(
+                                            width: 14,
+                                            height: 14,
+                                          ),
                                         ),
-                                      ),
+                                      const SizedBox(width: 6),
+                                      AppText(value.label),
                                     ],
                                   ),
                                 ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          helpText('主题色用于主要按钮、文件选择和交互高亮，立即生效。'),
+                          SizedBox(height: HiSpace.xl),
+                          Wrap(
+                            children: [
+                              AppText('界面 DPI', style: HiText.sectionLabel),
+                              AppText(
+                                '：${(settings.dpiScale * 100).round()}%',
+                                style: HiText.sectionLabel,
                               ),
+                            ],
+                          ),
+                          DesktopSlider(
+                            value: settings.dpiScale,
+                            min: .75,
+                            max: 1.5,
+                            divisions: 15,
+                            onChanged: settings.saving
+                                ? null
+                                : settings.setDpiScale,
+                          ),
+                          const SizedBox(height: HiSpace.sm),
+                          helpText('调整界面文字大小，重启应用后仍会保留。'),
+                          SizedBox(height: HiSpace.xl),
+                          AppText('辅助窗口显示方式', style: HiText.sectionLabel),
+                          const SizedBox(height: 12),
+                          DesktopSelect<AuxiliaryWindowMode>(
+                            key: const ValueKey('window-mode-select'),
+                            value: settings.windowMode,
+                            items: const {
+                              '画面内显示': AuxiliaryWindowMode.inline,
+                              '独立窗口显示': AuxiliaryWindowMode.separate,
+                            },
+                            onChanged: settings.saving
+                                ? null
+                                : settings.setWindowMode,
+                          ),
+                          const SizedBox(height: 8),
+                          helpText(
+                            '控制设置、属性和对话框的显示位置。任务进度和结果始终显示在下方状态栏。紧凑布局下对话框全屏显示。',
+                          ),
+                        ],
+                        if (section == 'archive') ...[
+                          AppText('压缩包', style: HiText.pageTitle),
+                          SizedBox(height: HiSpace.xl),
+                          encodingPicker(
+                            title: '读取默认文件名编码',
+                            value: settings.archive.readEncoding,
+                            creating: false,
+                          ),
+                          const SizedBox(height: 8),
+                          helpText(
+                            '自动识别优先使用压缩包声明的编码。文件名乱码时，可在“文件 → 编码”中切换当前压缩包的编码。',
+                          ),
+                          SizedBox(height: HiSpace.xl),
+                          encodingPicker(
+                            title: '创建 ZIP 的文件名编码',
+                            value: settings.archive.createEncoding,
+                            creating: true,
+                          ),
+                          const SizedBox(height: HiSpace.sm),
+                          helpText('建议使用 UTF-8。此设置用于新建 ZIP，不改变文件内容的编码。'),
+                          SizedBox(height: HiSpace.xl),
+                          AppText(
+                            '创建 ZIP 的压缩等级：${settings.archive.compressionLevel == 0 ? "不压缩" : settings.archive.compressionLevel}',
+                            style: HiText.sectionLabel,
+                          ),
+                          DesktopSlider(
+                            value: settings.archive.compressionLevel.toDouble(),
+                            min: 0,
+                            max: 9,
+                            divisions: 9,
+                            onChanged: settings.saving
+                                ? null
+                                : (value) => settings.setArchive(
+                                    ArchivePreferences(
+                                      readEncoding:
+                                          settings.archive.readEncoding,
+                                      createEncoding:
+                                          settings.archive.createEncoding,
+                                      compressionLevel: value.round(),
+                                    ),
+                                  ),
+                          ),
+                          const SizedBox(height: HiSpace.sm),
+                          helpText('0 不压缩，1 更快，9 压缩率更高。设置自动保存，下次创建时生效。'),
+                        ],
+                        if (section == 'general') ...[
+                          AppText('通用', style: HiText.pageTitle),
+                          SizedBox(height: HiSpace.xl),
+                          AppText('文件关联', style: HiText.sectionLabel),
+                          SizedBox(height: HiSpace.md),
+                          helpText(
+                            '可在系统的“打开方式”中选择 HiZip。下方按钮将支持的压缩包格式设为由 HiZip 默认打开。',
+                          ),
+                          const SizedBox(height: 16),
+                          DesktopButton(
+                            onPressed:
+                                associating ||
+                                    !DesktopIntegration()
+                                        .supportsDefaultApplication
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      associating = true;
+                                      associationResult = null;
+                                    });
+                                    try {
+                                      await DesktopIntegration()
+                                          .setDefaultArchiveHandler();
+                                      if (mounted) {
+                                        setState(
+                                          () => associationResult = '已设为默认打开方式',
+                                        );
+                                      }
+                                    } catch (error) {
+                                      if (mounted) {
+                                        setState(
+                                          () =>
+                                              associationResult = '设置失败：$error',
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => associating = false);
+                                      }
+                                    }
+                                  },
+                            child: const AppText('设为默认打开方式'),
+                          ),
+                          if (DesktopIntegration().supportsQuickLook) ...[
+                            SizedBox(height: HiSpace.xl),
+                            const AppText(
+                              'Finder 右键菜单',
+                              style: HiText.sectionLabel,
+                            ),
+                            SizedBox(height: HiSpace.md),
+                            helpText(
+                              '启用 HiZip Finder 扩展后，可在文件右键菜单中创建压缩包或快速创建 ZIP。',
+                            ),
+                            const SizedBox(height: 12),
+                            DesktopButton(
+                              onPressed: () async {
+                                try {
+                                  await DesktopIntegration()
+                                      .showFinderExtensionSettings();
+                                } catch (error) {
+                                  if (mounted) {
+                                    setState(
+                                      () => associationResult = '设置失败：$error',
+                                    );
+                                  }
+                                }
+                              },
+                              child: const AppText('管理 Finder 扩展'),
+                            ),
                           ],
+                          if (associationResult != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: AppText(
+                                associationResult!,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                        ],
+                        if (section == 'performance') ...[
+                          AppText('性能', style: HiText.pageTitle),
+                          SizedBox(height: HiSpace.xl),
+                          AppText('解压线程数', style: HiText.sectionLabel),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final value in <int?>[null, 1, 2, 4])
+                                DesktopButton(
+                                  active: settings.extractionWorkers == value,
+                                  onPressed: settings.saving
+                                      ? null
+                                      : () => settings.setExtractionWorkers(
+                                          value,
+                                        ),
+                                  child: AppText(
+                                    value == null ? '自动' : '$value 个线程',
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          helpText(
+                            '自动根据处理器数量分配，最多使用 4 个线程。更多线程适合包含多个大文件的 ZIP；减少线程可降低 CPU 和磁盘占用。',
+                          ),
+                          const SizedBox(height: 12),
+                          helpText(
+                            '自动模式下，小压缩包使用单线程。单文件及不适合并行解压的格式使用顺序读取。设置自动保存，下次解压时生效。',
+                          ),
+                        ],
+                        if (settings.error != null) ...[
+                          const SizedBox(height: 16),
+                          AppText(
+                            settings.error!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                  return HiSidebarPage(
+                    sidebarWidth: sidebarWidth,
+                    items: [
+                      for (final category in const [
+                        ('general', CupertinoIcons.gear, '通用'),
+                        ('appearance', CupertinoIcons.paintbrush, '外观'),
+                        ('archive', CupertinoIcons.archivebox, '压缩包'),
+                        ('performance', CupertinoIcons.speedometer, '性能'),
+                      ])
+                        HiNavItem(
+                          id: category.$1,
+                          icon: category.$2,
+                          label: appText(context, category.$3),
                         ),
-                      ),
-                      Expanded(child: content),
                     ],
+                    selectedId: section,
+                    onSelected: (id) => setState(() => section = id),
+                    child: content,
                   );
                 },
               ),

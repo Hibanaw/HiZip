@@ -1,3 +1,5 @@
+import 'package:hiwidget/hiwidget.dart';
+
 import 'app_localizations.dart';
 import '../services/app_settings.dart';
 
@@ -142,24 +144,7 @@ Widget windowLeadingControls() => _enabled && Platform.isMacOS
     : const SizedBox.shrink();
 
 Widget windowTrailingControls() => _enabled && !Platform.isMacOS
-    ? Platform.isWindows
-        // The toolbar/title bar's Container pads both sides by 8 and
-        // vertically centers its Row; cancel just enough of that here
-        // (paint-only translate for the padding, an explicit height to give
-        // Align room) so the buttons sit flush in the window's true
-        // top-right corner like native caption buttons, keeping their own
-        // native ~32px height rather than stretching into our taller bar.
-        ? Transform.translate(
-            offset: const Offset(8, 0),
-            child: SizedBox(
-              height: windowChromeHeight(),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: _WindowControls(window: _window!),
-              ),
-            ),
-          )
-        : _WindowControls(window: _window!)
+    ? _WindowControls(window: _window!)
     : const SizedBox.shrink();
 
 class _WindowControls extends StatefulWidget {
@@ -184,16 +169,17 @@ class _WindowControlsState extends State<_WindowControls> {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          const _CaptionDivider(),
           _WindowsCaptionButton(
             tooltip: '最小化',
-            glyph: _CaptionGlyph.minimize,
+            icon: Icons.remove,
             onPressed: widget.window.minimize,
           ),
           _WindowsCaptionButton(
             tooltip: widget.window.isMaximized ? '还原' : '最大化',
-            glyph: widget.window.isMaximized
-                ? _CaptionGlyph.restore
-                : _CaptionGlyph.maximize,
+            icon: widget.window.isMaximized
+                ? Icons.filter_none
+                : Icons.crop_square,
             onPressed: () => setState(() {
               if (widget.window.isMaximized) {
                 widget.window.unmaximize();
@@ -204,7 +190,7 @@ class _WindowControlsState extends State<_WindowControls> {
           ),
           _WindowsCaptionButton(
             tooltip: '关闭',
-            glyph: _CaptionGlyph.close,
+            icon: Icons.close,
             isClose: true,
             onPressed: close,
           ),
@@ -239,32 +225,19 @@ class _WindowControlsState extends State<_WindowControls> {
   }
 }
 
-// Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) caption
-// glyphs, the same font the system's own caption buttons render with.
-enum _CaptionGlyph {
-  minimize('\uE921'),
-  maximize('\uE922'),
-  restore('\uE923'),
-  close('\uE8BB');
-
-  const _CaptionGlyph(this.codePoint);
-  final String codePoint;
-}
-
-/// A Windows 11 Fluent-styled caption button (46×32, square corners, light
-/// hover for minimize/maximize, solid red hover for close). HiZip hides the
-/// real title bar on Windows (DWM's own caption buttons stop hit-testing
-/// once that area becomes client-side), so this self-drawn button matches
-/// the native look without being a real system control.
+/// Windows caption button drawn with HiZip's own controls so its height and
+/// corners match the toolbar buttons beside it. Two cues keep it distinct
+/// from them: the group sits behind a hairline divider, and hover is a
+/// neutral gray (toolbar buttons tint with the accent) with a solid red close.
 class _WindowsCaptionButton extends StatefulWidget {
   const _WindowsCaptionButton({
     required this.tooltip,
-    required this.glyph,
+    required this.icon,
     required this.onPressed,
     this.isClose = false,
   });
   final String tooltip;
-  final _CaptionGlyph glyph;
+  final IconData icon;
   final VoidCallback onPressed;
   final bool isClose;
   @override
@@ -273,10 +246,6 @@ class _WindowsCaptionButton extends StatefulWidget {
 
 class _WindowsCaptionButtonState extends State<_WindowsCaptionButton> {
   bool hovering = false, pressed = false;
-  // Hover/press alpha follows window_manager: it differs between light and
-  // dark, and the close button ignores the theme in favor of the fixed red.
-  static const _closeHoverColor = Color(0xffc42b1c);
-  static const _closePressedColor = Color(0xe5c42b1c);
 
   @override
   Widget build(BuildContext context) {
@@ -285,14 +254,14 @@ class _WindowsCaptionButtonState extends State<_WindowsCaptionButton> {
     final overlay = dark ? Colors.white : Colors.black;
     final background = widget.isClose
         ? pressed
-              ? _closePressedColor
+              ? HiColors.closePressed
               : hovering
-              ? _closeHoverColor
+              ? HiColors.closeHover
               : Colors.transparent
         : pressed
-        ? overlay.withValues(alpha: dark ? .0419 : .0241)
+        ? overlay.withValues(alpha: dark ? .16 : .12)
         : hovering
-        ? overlay.withValues(alpha: dark ? .0605 : .0373)
+        ? overlay.withValues(alpha: dark ? .10 : .07)
         : Colors.transparent;
     final iconColor = widget.isClose && (hovering || pressed)
         ? Colors.white
@@ -311,26 +280,31 @@ class _WindowsCaptionButtonState extends State<_WindowsCaptionButton> {
           onTapUp: (_) => setState(() => pressed = false),
           onTap: widget.onPressed,
           child: Container(
-            width: 46,
-            height: 32,
-            color: background,
-            alignment: Alignment.center,
-            child: Text(
-              widget.glyph.codePoint,
-              textScaler: TextScaler.noScaling,
-              style: TextStyle(
-                fontFamily: 'Segoe Fluent Icons',
-                fontFamilyFallback: const ['Segoe MDL2 Assets'],
-                fontSize: 10,
-                height: 1,
-                color: iconColor,
-              ),
+            width: 30,
+            height: HiSize.control,
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: HiRadius.controlAll,
             ),
+            alignment: Alignment.center,
+            child: Icon(widget.icon, size: 15, color: iconColor),
           ),
         ),
       ),
     );
   }
+}
+
+/// Hairline that separates the window controls from the toolbar's actions.
+class _CaptionDivider extends StatelessWidget {
+  const _CaptionDivider();
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 1,
+    height: 18,
+    margin: const EdgeInsets.symmetric(horizontal: HiSpace.sm),
+    color: Theme.of(context).dividerColor,
+  );
 }
 
 Map<String, double> windowFrame() {
@@ -387,17 +361,25 @@ void configurePropertiesWindow() {
   _window!.center();
 }
 
-void configureAuxiliaryDialogWindow(String kind, Map<String, dynamic> parent) {
+/// Native title for a dialog window; the content does not repeat it.
+String auxiliaryDialogTitle(String kind, Map<String, dynamic> data) =>
+    switch (kind) {
+      'create' => '创建压缩包',
+      'password' => '输入压缩包密码',
+      'extraction' => '解压选项',
+      'transfer' => data['move'] == true ? '移动到…' : '复制到…',
+      'rename' => '重命名',
+      'entryName' => data['title'] as String? ?? '创建',
+      _ => '操作信息',
+    };
+
+void configureAuxiliaryDialogWindow(
+  String kind,
+  Map<String, dynamic> parent, {
+  String? title,
+}) {
   final window = _window!;
-  final title = switch (kind) {
-    'create' => '创建压缩包',
-    'password' => '输入压缩包密码',
-    'extraction' => '解压选项',
-    'transfer' => '目录',
-    'rename' => '重命名',
-    'entryName' => '创建',
-    _ => '操作信息',
-  };
+  title ??= auxiliaryDialogTitle(kind, const {});
   window.title =
       'HiZip · ${translateAppText(title, AppSettings.instance.locale.languageCode)}';
   window.minimumSize = const Size(380, 280).toNative();
